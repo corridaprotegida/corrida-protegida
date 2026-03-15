@@ -4,3 +4,4 @@ pillow
 st-supabase-connection
 streamlit-js-eval
 geopy
+extra-streamlit-components
