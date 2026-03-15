@@ -1,5 +1,6 @@
 streamlit
 pandas
 pillow
-geopy
 st-supabase-connection
+streamlit-js-eval
+geopy
