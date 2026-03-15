@@ -79,7 +79,7 @@ else:
                     st.rerun()
 
     # --- TELA DO MOTORISTA ---
-      elif st.session_state.user_tipo == "Sou Motorista":
+        elif st.session_state.user_tipo == "Sou Motorista":
         st.subheader("🛣️ Corridas Disponíveis")
         res_c = conn.table("corridas").select("*").eq("status", "Aguardando").execute()
         
