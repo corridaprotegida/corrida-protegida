@@ -79,7 +79,7 @@ else:
                     st.rerun()
 
     # --- TELA DO MOTORISTA ---
-    elif st.session_state.user_tipo == "Sou Motorista":
+      elif st.session_state.user_tipo == "Sou Motorista":
         st.subheader("🛣️ Corridas Disponíveis")
         res_c = conn.table("corridas").select("*").eq("status", "Aguardando").execute()
         
@@ -91,19 +91,23 @@ else:
                 with st.expander(f"🚩 DE: {r['ponto_origem']}"):
                     st.write(f"**DESTINO:** {r['ponto_destino']}")
                     
-                    # GOOGLE MAPS (Link Universal)
-                    end_maps = urllib.parse.quote(r['ponto_origem'])
-                    link_maps = f"https://www.google.com{end_maps}"
+                    # --- LINK CORRIGIDO DO GOOGLE MAPS ---
+                    # A barra "/" após o .com e o "?q=" são obrigatórios
+                    endereco_formatado = urllib.parse.quote(r['ponto_origem'])
+                    link_maps = f"https://www.google.com{endereco_formatado}"
                     
                     if st.button(f"✅ Aceitar #{r['id']}", key=f"ac_{r['id']}"):
+                        # Registra que este motorista aceitou
                         conn.table("corridas").update({
                             "status": "Em curso", 
                             "motorista_nome": st.session_state.user_nome
                         }).eq("id", r['id']).execute()
-                        st.success("Aceito!"); st.balloons()
+                        st.success("Corrida Aceita!")
+                        st.balloons()
                         time.sleep(1)
                         st.rerun()
                     
+                    # Botão azul do Google Maps
                     st.markdown(f'''<a href="{link_maps}" target="_blank" style="text-decoration:none;">
-                                    <div style="background-color:#4285F4; color:white; padding:10px; border-radius:8px; text-align:center; font-weight:bold;">
-                                    📍 Abrir no Google Maps</div></a>''', unsafe_allow_html=True)
+                                    <div style="background-color:#4285F4; color:white; padding:12px; border-radius:8px; text-align:center; font-weight:bold;">
+                                    📍 Abrir Navegação no Google Maps</div></a>''', unsafe_allow_html=True)
