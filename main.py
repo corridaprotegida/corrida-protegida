@@ -105,4 +105,4 @@ else:
                         conn.table("corridas").update({"status": "Em curso"}).eq("id", r['id']).execute()
                         st.success(f"Corrida aceita! O passageiro foi avisado que você chega em {tempo} min.")
                         st.balloons()
-                    st.markdown(f'[🚗 Abrir Rota no Waze]({link_waze})')
+                    st.markdown(f'[🚗 Abrir Rota no Waze]({www.waze.com})')
