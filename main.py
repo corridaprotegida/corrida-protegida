@@ -41,7 +41,7 @@ else:
     st.sidebar.button("Sair", on_click=logout)
     st.title(f"Olá, {st.session_state.user_nome}! 🛡️")
     
-    # Captura GPS em tempo real (necessário para cálculo de distância)
+    # Captura GPS (Ambos precisam permitir no navegador)
     loc = streamlit_js_eval(data='getCurrentPosition', component_value=None, key='gps_geral')
 
     # --- VISÃO PASSAGEIRO ---
@@ -51,23 +51,26 @@ else:
         if res.data:
             c = res.data[0]
             if c['status'] == "Aguardando":
-                st.warning("⏳ Buscando motorista... O GPS dele será calculado ao aceitar.")
+                st.warning("⏳ Buscando motorista... Fique na página.")
                 st.button("🔄 Atualizar Status")
-            else:
-                st.success(f"✅ Motorista **{c.get('motorista_nome')}** a caminho!")
-                dist = c.get('distancia_km')
-                if dist:
-                    tempo = int(dist * 4) # Estimativa 4 min por KM
-                    st.metric("Distância do Motorista", f"{dist:.2f} km", f"Chegada em ~{tempo} min")
+            elif c['status'] == "Em curso":
+                st.success(f"✅ O motorista **{c.get('motorista_nome')}** aceitou sua corrida!")
+                tempo = c.get('tempo_chegada', "A caminho")
+                st.info(f"⏱️ Previsão de chegada: **{tempo}**")
+                
                 if st.button("🏁 Finalizar (Cheguei)"):
                     conn.table("corridas").update({"status": "Finalizada"}).eq("id", c['id']).execute()
                     st.rerun()
         else:
-            orig, dest = st.text_input("🏠 Onde você está?"), st.text_input("🏁 Destino")
+            orig, dest = st.text_input("🏠 Onde você está? (Endereço)"), st.text_input("🏁 Destino")
             if st.button("CHAMAR AGORA"):
-                # Se o GPS do passageiro estiver ativo, salvamos as coordenadas
+                # Salva Lat/Lon do passageiro se o GPS permitir
                 lat_p, lon_p = (loc['coords']['latitude'], loc['coords']['longitude']) if loc else (None, None)
-                conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": orig, "ponto_destino": dest, "status": "Aguardando", "lat_origem": lat_p, "lon_origem": lon_p}]).execute()
+                conn.table("corridas").insert([{
+                    "passageiro": st.session_state.user_nome, 
+                    "ponto_origem": orig, "ponto_destino": dest, "status": "Aguardando",
+                    "lat_origem": lat_p, "lon_origem": lon_p
+                }]).execute()
                 st.rerun()
 
     # --- VISÃO MOTORISTA ---
@@ -81,29 +84,26 @@ else:
                     st.write(f"👤 **{r['passageiro']}**")
                     st.write(f"📍 {r['ponto_origem']} ➡️ {r['ponto_destino']}")
                     
-                    # Cálculo de distância se ambos tiverem GPS
-                    dist_calculada = None
+                    # Cálculo de distância se houver GPS de ambos
+                    tempo_estimado = "5 a 10 min"
                     if loc and r.get('lat_origem'):
                         p_mot = (loc['coords']['latitude'], loc['coords']['longitude'])
                         p_psg = (r['lat_origem'], r['lon_origem'])
-                        dist_calculada = geodesic(p_mot, p_psg).km
-                        st.info(f"📏 Você está a {dist_calculada:.2f} km deste passageiro.")
+                        dist = geodesic(p_mot, p_psg).km
+                        tempo_estimado = f"{int(dist * 4) + 2} min"
+                        st.info(f"📏 Você está a {dist:.2f} km do passageiro (~{tempo_estimado})")
 
-                    # Link do Mapa Estático
+                    # Mapa estático
                     end_b = urllib.parse.quote(r['ponto_origem'])
-                    st.image(f"https://static-maps.yandex.ru{end_b}", caption="Localização aproximada")
+                    st.image(f"https://static-maps.yandex.ru{end_b}")
 
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button(f"✅ Aceitar #{r['id']}", key=f"ac_{r['id']}"):
-                            lat_m, lon_m = (loc['coords']['latitude'], loc['coords']['longitude']) if loc else (None, None)
-                            conn.table("corridas").update({
-                                "status": "Em curso", 
-                                "motorista_nome": st.session_state.user_nome,
-                                "lat_motorista": lat_m, "lon_motorista": lon_m,
-                                "distancia_km": dist_calculada
-                            }).eq("id", r['id']).execute()
-                            st.success("Aceito!"); st.balloons(); time.sleep(1); st.rerun()
-                    with col2:
-                        # Deep Links para os Apps
-                        st.markdown(f'<a href="waze://?q={end_b}&navigate=yes"><button style="background:#33ccff;color:white;border:none;padding:10px;border-radius:5px;width:100%;font-weight:bold;cursor:pointer;">🚗 Abrir WAZE</button></a>', unsafe_allow_html=True)
+                    if st.button(f"✅ Aceitar #{r['id']}", key=f"ac_{r['id']}"):
+                        conn.table("corridas").update({
+                            "status": "Em curso", 
+                            "motorista_nome": st.session_state.user_nome,
+                            "tempo_chegada": tempo_estimado
+                        }).eq("id", r['id']).execute()
+                        st.success("Corrida Aceita! O passageiro foi avisado."); st.balloons(); time.sleep(1); st.rerun()
+                    
+                    # Deep Links para Apps
+                    st.markdown(f'<a href="waze://?q={end_b}&navigate=yes"><button style="background:#33ccff;color:white;border:none;padding:10px;border-radius:5px;width:100%;font-weight:bold;cursor:pointer;">🚗 Abrir WAZE</button></a>', unsafe_allow_html=True)
