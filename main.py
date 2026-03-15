@@ -1,33 +1,13 @@
 import streamlit as st
-import sqlite3
+from st_supabase_connection import SupabaseConnection
 import pandas as pd
-import os
 import urllib.parse
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Corrida Protegida", page_icon="🛡️", layout="centered")
+st.set_page_config(page_title="Corrida Protegida 🛡️", layout="centered")
 
-# Pasta para as fotos do FaceID
-if not os.path.exists("fotos"):
-    os.makedirs("fotos")
-
-# --- BANCO DE DADOS (Versão 3) ---
-def conectar():
-    return sqlite3.connect('corrida_v3.db', check_same_thread=False)
-
-def iniciar_banco():
-    conn = conectar()
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS usuarios
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT, nome TEXT, 
-                       cpf TEXT UNIQUE, senha TEXT, foto TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS corridas
-                      (id INTEGER PRIMARY KEY AUTOINCREMENT, passageiro TEXT, 
-                       ponto_origem TEXT, ponto_destino TEXT, status TEXT)''')
-    conn.commit()
-    conn.close()
-
-iniciar_banco()
+# CONEXÃO COM SUPABASE (Lê direto dos Secrets)
+conn = st.connection("supabase", type=SupabaseConnection)
 
 # --- CONTROLE DE SESSÃO ---
 if "logado" not in st.session_state:
@@ -56,84 +36,62 @@ if not st.session_state.logado:
             cpf = st.text_input("CPF (números)")
             senha = st.text_input("Senha", type="password")
             foto = st.camera_input("Selfie FaceID")
-            if st.button("Cadastrar"):
-                if foto and nome and cpf and senha:
-                    caminho = f"fotos/{cpf}.jpg"
-                    with open(caminho, "wb") as f: f.write(foto.getbuffer())
+            
+            if st.button("Finalizar Cadastro"):
+                if nome and cpf and senha:
                     try:
-                        conn = conectar(); cursor = conn.cursor()
-                        cursor.execute("INSERT INTO usuarios (tipo, nome, cpf, senha, foto) VALUES (?,?,?,?,?)",
-                                       (menu, nome, cpf, senha, caminho))
-                        conn.commit(); conn.close()
-                        st.success("✅ Pronto! Faça login.")
-                    except: st.error("CPF já existe.")
-                else: st.warning("Preencha tudo!")
+                        # SALVANDO NO SUPABASE (BANCO REAL)
+                        conn.table("usuarios").insert([
+                            {"tipo": menu, "nome": nome, "cpf": cpf, "senha": senha}
+                        ]).execute()
+                        st.success("✅ Cadastro Realizado no Banco de Dados Real!")
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
+                else:
+                    st.warning("Preencha todos os campos!")
 
         with aba_log:
             l_cpf = st.text_input("CPF", key="l_cpf")
             l_pass = st.text_input("Senha", type="password", key="l_pass")
             if st.button("Entrar"):
-                conn = conectar(); cursor = conn.cursor()
-                cursor.execute("SELECT nome FROM usuarios WHERE cpf=? AND senha=? AND tipo=?", (l_cpf, l_pass, menu))
-                user = cursor.fetchone()
-                if user:
+                # BUSCANDO NO SUPABASE
+                res = conn.table("usuarios").select("nome").eq("cpf", l_cpf).eq("senha", l_pass).eq("tipo", menu).execute()
+                if res.data:
                     st.session_state.logado = True
-                    st.session_state.user_nome = user[0]
+                    st.session_state.user_nome = res.data[0]['nome']
                     st.session_state.user_tipo = menu
                     st.rerun()
-                else: st.error("Dados incorretos.")
+                else:
+                    st.error("Dados incorretos.")
 
-    elif menu == "Admin":
-        if st.text_input("Senha Admin", type="password") == "admin123":
-            st.dataframe(pd.read_sql_query("SELECT * FROM usuarios", conectar()))
-
-# --- PAINEL DO USUÁRIO ---
+# --- PAINEL PÓS-LOGIN ---
 else:
     st.sidebar.button("Sair", on_click=logout)
     st.title(f"Olá, {st.session_state.user_nome}! 🛡️")
 
-    # --- BOTÃO DE PÂNICO SOS (Para ambos) ---
-    with st.sidebar:
-        st.markdown("---")
-        st.error("🚨 EMERGÊNCIA")
-        msg_sos = urllib.parse.quote(f"SOCORRO! Preciso de ajuda na Corrida Protegida. Sou {st.session_state.user_nome}.")
-        link_sos = f"https://wa.me{msg_sos}" # Troque pelo seu número
-        st.markdown(f'<a href="{link_sos}" target="_blank"><button style="background-color:red; color:white; border:none; padding:15px; width:100%; border-radius:10px; font-weight:bold; cursor:pointer;">🆘 ACIONAR POLÍCIA / SOS</button></a>', unsafe_allow_html=True)
-
     if st.session_state.user_tipo == "Sou Passageiro":
         st.subheader("📍 Pedir Corrida")
-        orig = st.text_input("Sua Localização (Rua, Nº, Bairro)")
-        dest = st.text_input("Destino Final")
+        orig = st.text_input("Localização")
+        dest = st.text_input("Destino")
         if st.button("CHAMAR AGORA"):
-            if orig and dest:
-                conn = conectar()
-                conn.execute("INSERT INTO corridas (passageiro, ponto_origem, ponto_destino, status) VALUES (?,?,?,?)",
-                             (st.session_state.user_nome, orig, dest, "Aguardando"))
-                conn.commit()
-                st.success("🚀 Chamada enviada! Aguarde o motorista.")
-            else: st.warning("Informe origem e destino.")
+            conn.table("corridas").insert([
+                {"passageiro": st.session_state.user_nome, "ponto_origem": orig, "ponto_destino": dest, "status": "Aguardando"}
+            ]).execute()
+            st.success("🚀 Chamada enviada para a nuvem!")
 
     elif st.session_state.user_tipo == "Sou Motorista":
-        st.subheader("🛣️ Corridas para Você")
-        df = pd.read_sql_query("SELECT * FROM corridas WHERE status='Aguardando'", conectar())
-        if df.empty:
+        st.subheader("🛣️ Corridas Disponíveis")
+        res_corridas = conn.table("corridas").select("*").eq("status", "Aguardando").execute()
+        if not res_corridas.data:
             st.info("Buscando passageiros...")
             if st.button("🔄 Atualizar"): st.rerun()
         else:
-            for i, r in df.iterrows():
+            for r in res_corridas.data:
                 with st.expander(f"🚩 DE: {r['ponto_origem']}"):
                     st.write(f"**PARA:** {r['ponto_destino']}")
-                    
-                    # LINK WAZE CORRIGIDO
                     end_waze = urllib.parse.quote(r['ponto_origem'])
                     link_waze = f"https://waze.com{end_waze}&navigate=yes"
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button(f"✅ Aceitar #{r['id']}"):
-                            conn = conectar()
-                            conn.execute("UPDATE corridas SET status='Em curso' WHERE id=?", (r['id'],))
-                            conn.commit()
-                            st.success("Aceito!"); st.balloons()
-                    with col2:
-                        st.markdown(f'<a href="{link_waze}" target="_blank"><button style="background-color:#33ccff; color:white; border:none; padding:10px; border-radius:5px; width:100%; cursor:pointer;">🚗 Ir ao Waze</button></a>', unsafe_allow_html=True)
+                    if st.button(f"✅ Aceitar #{r['id']}"):
+                        conn.table("corridas").update({"status": "Em curso"}).eq("id", r['id']).execute()
+                        st.success("Corrida aceita!"); st.balloons()
+                    st.markdown(f'[🚗 Abrir no Waze]({link_waze})')
