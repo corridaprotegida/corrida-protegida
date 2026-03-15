@@ -5,7 +5,7 @@ import urllib.parse
 
 # --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="Corrida Protegida 🛡️", layout="centered")
-conn = st.connection("supabase", type=BaseComponent=SupabaseConnection)
+conn = st.connection("supabase", type=SupabaseConnection)
 
 if "logado" not in st.session_state:
     st.session_state.logado, st.session_state.user_nome, st.session_state.user_tipo = False, "", ""
