@@ -1,5 +1,6 @@
 import streamlit as st
 from st_supabase_connection import SupabaseConnection
+from streamlit_js_eval import streamlit_js_eval
 import pandas as pd
 import random
 import urllib.parse
@@ -46,7 +47,7 @@ if not st.session_state.user_cpf:
                 st.session_state.user_nome = user['nome']
                 st.session_state.user_tipo = user['tipo']
                 st.rerun()
-            else: st.error("Dados incorretos ou perfil errado.")
+            else: st.error("Dados incorretos.")
 
 # --- PAINEL LOGADO ---
 else:
@@ -62,68 +63,81 @@ else:
         if res.data and len(res.data) > 0:
             c = res.data[0]
             st.info(f"Status Atual: **{c['status']}**")
-            
-            if c['status'] == "Preço Sugerido":
-                st.metric("VALOR OFERTADO", f"R$ {c['valor_total']:.2f}")
-                col1, col2 = st.columns(2)
-                if col1.button("✅ ACEITAR PREÇO", key=f"acc_p_{c['id']}"):
-                    conn.table("corridas").update({"status": "Confirmada"}).eq("id", c['id']).execute()
-                    st.rerun()
-                if col2.button("❌ RECUSAR", key=f"rec_p_{c['id']}"):
-                    conn.table("corridas").update({"status": "Finalizada"}).eq("id", c['id']).execute()
-                    st.rerun()
-            elif c['status'] == "Confirmada":
-                st.success(f"O motorista {c.get('motorista_nome')} aceitou o preço e está a caminho!")
-                st.info(f"De: {c['ponto_origem']} ➡️ Para: {c['ponto_destino']}")
+            if c['status'] == "Confirmada":
+                st.success(f"Motorista {c.get('motorista_nome')} aceitou o seu preço e está a caminho!")
+                st.metric("VALOR COMBINADO", f"R$ {c['valor_total']:.2f}")
         else:
             o = st.text_input("Onde você está?", key="psg_orig")
             d = st.text_input("Para onde vamos?", key="psg_dest")
-            if st.button("BUSCAR MOTORISTAS", key="btn_busca"):
+            v_sugerido = st.number_input("Quanto deseja oferecer pela corrida? (R$)", min_value=5.0, value=15.0, step=1.0, key="psg_val")
+            
+            if st.button("BUSCAR MOTORISTAS 🚀", key="btn_busca"):
                 if o and d:
-                    conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": o, "ponto_destino": d, "status": "Buscando"}]).execute()
+                    conn.table("corridas").insert([{
+                        "passageiro": st.session_state.user_nome, 
+                        "ponto_origem": o, 
+                        "ponto_destino": d, 
+                        "valor_total": v_sugerido,
+                        "status": "Buscando"
+                    }]).execute()
                     st.rerun()
 
     # --- VISÃO MOTORISTA ---
     elif st.session_state.user_tipo == "Sou Motorista":
         st.title("Painel do Motorista 🛣️")
         
-        # 1. Configurar Ganho
+        # 1. Configurar Tarifa (Opcional agora que passageiro sugere)
         perf = conn.table("usuarios").select("preco_km").eq("cpf", st.session_state.user_cpf).execute()
         taxa_atual = perf.data[0]['preco_km'] if perf.data else 1.70
-        taxa = st.number_input("Seu ganho por KM (Limite R$ 7,00)", 1.0, 7.0, float(taxa_atual), step=0.1, key="mot_taxa")
-        if st.button("Salvar Tarifa", key="btn_save_taxa"):
-            conn.table("usuarios").update({"preco_km": taxa}).eq("cpf", st.session_state.user_cpf).execute()
-            st.success("Tarifa atualizada!")
+        st.info(f"Sua mensalidade: R$ 52,99 | Sua base: R$ {taxa_atual:.2f}/km")
 
-        # 2. Corridas Disponíveis (Negociação)
+        # 2. Corridas Disponíveis com Preço do Passageiro
         st.write("---")
         corridas = conn.table("corridas").select("*").eq("status", "Buscando").execute()
         if not corridas.data:
             st.info("Nenhuma chamada nova. Clique em Atualizar.")
+        
         for r in corridas.data:
             with st.container(border=True):
-                dist = round(random.uniform(2.0, 6.0), 2)
-                valor = 5.0 + (dist * taxa)
-                st.write(f"👤 **{r['passageiro']}** | 💰 Sugerido: **R$ {valor:.2f}**")
-                if st.button(f"OFERTAR PREÇO #{r['id']}", key=f"btn_offer_{r['id']}"):
+                st.write(f"👤 **{r['passageiro']}**")
+                st.write(f"📍 DE: {r['ponto_origem']}")
+                st.write(f"🏁 PARA: {r['ponto_destino']}")
+                st.write(f"💰 PASSAGEIRO OFERECE: **R$ {r['valor_total']:.2f}**")
+                
+                if st.button(f"ACEITAR VALOR E INICIAR #{r['id']}", key=f"btn_acc_{r['id']}"):
                     conn.table("corridas").update({
-                        "status": "Preço Sugerido", "valor_total": valor, 
+                        "status": "Confirmada", 
                         "motorista_nome": st.session_state.user_nome
                     }).eq("id", r['id']).execute()
                     st.rerun()
 
-        # 3. Viagens Confirmadas (GPS)
+        # 3. Viagens Confirmadas (Botões Diretos para APPS)
         st.write("---")
         conf = conn.table("corridas").select("*").eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
         if conf.data:
             for c in conf.data:
                 st.success(f"VIAGEM CONFIRMADA COM {c['passageiro']}")
                 end = urllib.parse.quote(c['ponto_origem'])
-                # Botão do Google Maps corrigido
-                link_maps = f"https://www.google.com{end}"
-                st.markdown(f'''<a href="{link_maps}" target="_blank" style="text-decoration:none;">
-                                <div style="background:#4285F4;color:white;padding:12px;border-radius:8px;text-align:center;font-weight:bold;">
-                                📍 ABRIR NAVEGAÇÃO GOOGLE MAPS</div></a>''', unsafe_allow_html=True)
+                
+                # LINKS QUE FORÇAM A ABERTURA DO APLICATIVO INSTALADO
+                link_waze = f"waze://?q={end}&navigate=yes"
+                link_google = f"google.navigation:q={end}"
+                
+                st.markdown(f"""
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <a href="{link_waze}" style="text-decoration: none;">
+                        <div style="background:#33ccff;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;cursor:pointer;">
+                            🚗 ABRIR NO APP WAZE
+                        </div>
+                    </a>
+                    <a href="{link_google}" style="text-decoration: none;">
+                        <div style="background:#4285F4;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;cursor:pointer;">
+                            📍 ABRIR NO APP GOOGLE MAPS
+                        </div>
+                    </a>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 if st.button(f"🏁 FINALIZAR CORRIDA #{c['id']}", key=f"btn_fin_{c['id']}"):
                     conn.table("corridas").update({"status": "Finalizada"}).eq("id", c['id']).execute()
                     st.rerun()
