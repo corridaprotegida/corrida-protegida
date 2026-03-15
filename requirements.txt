@@ -2,3 +2,4 @@ streamlit
 pandas
 pillow
 geopy
+st-supabase-connection
