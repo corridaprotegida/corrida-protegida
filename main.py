@@ -1,7 +1,10 @@
 import streamlit as st
 from st_supabase_connection import SupabaseConnection
+from streamlit_js_eval import streamlit_js_eval
+from geopy.distance import geodesic
 import pandas as pd
 import urllib.parse
+import time
 
 # --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="Corrida Protegida 🛡️", layout="centered")
@@ -14,17 +17,17 @@ def logout():
     st.session_state.logado = False
     st.rerun()
 
-# --- LOGIN/CADASTRO ---
+# --- LOGIN / CADASTRO ---
 if not st.session_state.logado:
     st.title("🛡️ CORRIDA PROTEGIDA")
-    tab_log, tab_cad = st.tabs(["🔐 Entrar", "📝 Cadastrar"])
-    with tab_cad:
-        t = st.radio("Perfil:", ["Sou Passageiro", "Sou Motorista"], horizontal=True)
+    t1, t2 = st.tabs(["🔐 Entrar", "📝 Cadastrar"])
+    with t2:
+        tp = st.radio("Perfil:", ["Sou Passageiro", "Sou Motorista"], horizontal=True)
         n, c, s = st.text_input("Nome"), st.text_input("CPF"), st.text_input("Senha", type="password")
         if st.button("Finalizar Cadastro"):
-            conn.table("usuarios").insert([{"tipo": t, "nome": n, "cpf": c, "senha": s}]).execute()
+            conn.table("usuarios").insert([{"tipo": tp, "nome": n, "cpf": c, "senha": s}]).execute()
             st.success("✅ Cadastrado!")
-    with tab_log:
+    with t1:
         tl = st.radio("Perfil:", ["Sou Passageiro", "Sou Motorista"], horizontal=True, key="tl")
         lc, ls = st.text_input("CPF", key="lc"), st.text_input("Senha", type="password", key="ls")
         if st.button("Acessar"):
@@ -37,53 +40,70 @@ if not st.session_state.logado:
 else:
     st.sidebar.button("Sair", on_click=logout)
     st.title(f"Olá, {st.session_state.user_nome}! 🛡️")
+    
+    # Captura GPS em tempo real (necessário para cálculo de distância)
+    loc = streamlit_js_eval(data='getCurrentPosition', component_value=None, key='gps_geral')
 
+    # --- VISÃO PASSAGEIRO ---
     if st.session_state.user_tipo == "Sou Passageiro":
-        res = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
+        res = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").order("id", desc=True).limit(1).execute()
+        
         if res.data:
             c = res.data[0]
-            if c['status'] == "Aguardando": st.warning("⏳ Buscando motorista...")
-            else: st.success(f"✅ Motorista {c.get('motorista_nome')} a caminho!"); st.info(f"De: {c['ponto_origem']}")
-            if st.button("🏁 Cheguei"): 
-                conn.table("corridas").update({"status": "Finalizada"}).eq("id", c['id']).execute()
-                st.rerun()
+            if c['status'] == "Aguardando":
+                st.warning("⏳ Buscando motorista... O GPS dele será calculado ao aceitar.")
+                st.button("🔄 Atualizar Status")
+            else:
+                st.success(f"✅ Motorista **{c.get('motorista_nome')}** a caminho!")
+                dist = c.get('distancia_km')
+                if dist:
+                    tempo = int(dist * 4) # Estimativa 4 min por KM
+                    st.metric("Distância do Motorista", f"{dist:.2f} km", f"Chegada em ~{tempo} min")
+                if st.button("🏁 Finalizar (Cheguei)"):
+                    conn.table("corridas").update({"status": "Finalizada"}).eq("id", c['id']).execute()
+                    st.rerun()
         else:
-            o, d = st.text_input("🏠 Onde você está?"), st.text_input("🏁 Destino")
+            orig, dest = st.text_input("🏠 Onde você está?"), st.text_input("🏁 Destino")
             if st.button("CHAMAR AGORA"):
-                conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": o, "ponto_destino": d, "status": "Aguardando"}]).execute()
+                # Se o GPS do passageiro estiver ativo, salvamos as coordenadas
+                lat_p, lon_p = (loc['coords']['latitude'], loc['coords']['longitude']) if loc else (None, None)
+                conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": orig, "ponto_destino": dest, "status": "Aguardando", "lat_origem": lat_p, "lon_origem": lon_p}]).execute()
                 st.rerun()
 
+    # --- VISÃO MOTORISTA ---
     elif st.session_state.user_tipo == "Sou Motorista":
         res_c = conn.table("corridas").select("*").eq("status", "Aguardando").execute()
-        if not res_c.data: st.info("Buscando passageiros..."); st.button("🔄 Atualizar")
+        if not res_c.data:
+            st.info("Buscando passageiros..."); st.button("🔄 Atualizar")
         else:
             for r in res_c.data:
                 with st.container(border=True):
                     st.write(f"👤 **{r['passageiro']}**")
                     st.write(f"📍 {r['ponto_origem']} ➡️ {r['ponto_destino']}")
                     
-                    # --- MINI MAPA VISUAL (Google Static Maps Alternativo) ---
-                    # Mostra uma imagem do local para o motorista se localizar antes de abrir o GPS
-                    map_url = f"https://www.google.com"
-                    st.image(f"https://maps.googleapis.com{urllib.parse.quote(r['ponto_origem'])}&zoom=15&size=400x200&sensor=false", caption="Localização aproximada do passageiro")
+                    # Cálculo de distância se ambos tiverem GPS
+                    dist_calculada = None
+                    if loc and r.get('lat_origem'):
+                        p_mot = (loc['coords']['latitude'], loc['coords']['longitude'])
+                        p_psg = (r['lat_origem'], r['lon_origem'])
+                        dist_calculada = geodesic(p_mot, p_psg).km
+                        st.info(f"📏 Você está a {dist_calculada:.2f} km deste passageiro.")
 
-                    # --- BOTÕES DE NAVEGAÇÃO REAL (Deep Links) ---
-                    end = urllib.parse.quote(r['ponto_origem'])
-                    
-                    # Link que FORÇA o Google Maps App
-                    link_google = f"google.navigation:q={end}"
-                    # Link que FORÇA o Waze App
-                    link_waze = f"waze://?q={end}&navigate=yes"
-                    
+                    # Link do Mapa Estático
+                    end_b = urllib.parse.quote(r['ponto_origem'])
+                    st.image(f"https://static-maps.yandex.ru{end_b}", caption="Localização aproximada")
+
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button(f"✅ Aceitar #{r['id']}"):
-                            conn.table("corridas").update({"status": "Em curso", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
-                            st.rerun()
+                        if st.button(f"✅ Aceitar #{r['id']}", key=f"ac_{r['id']}"):
+                            lat_m, lon_m = (loc['coords']['latitude'], loc['coords']['longitude']) if loc else (None, None)
+                            conn.table("corridas").update({
+                                "status": "Em curso", 
+                                "motorista_nome": st.session_state.user_nome,
+                                "lat_motorista": lat_m, "lon_motorista": lon_m,
+                                "distancia_km": dist_calculada
+                            }).eq("id", r['id']).execute()
+                            st.success("Aceito!"); st.balloons(); time.sleep(1); st.rerun()
                     with col2:
-                        # Botão estilizado para abrir os APPS direto no celular
-                        st.markdown(f"""
-                            <a href="{link_waze}"><button style="background:#33ccff;color:white;border:none;padding:10px;border-radius:5px;width:100%;font-weight:bold;">🚗 Abrir no WAZE</button></a>
-                            <div style='margin-top:5px'></div>
-                            <a href="{link_google}"><button style="background:#4285F4;color:white;border:none;padding:10px;border-radius:5px;width:100%;font-weight:bold;">📍 Abrir no MAPS</button></a>
-                        """, unsafe_allow_html=True)
+                        # Deep Links para os Apps
+                        st.markdown(f'<a href="waze://?q={end_b}&navigate=yes"><button style="background:#33ccff;color:white;border:none;padding:10px;border-radius:5px;width:100%;font-weight:bold;cursor:pointer;">🚗 Abrir WAZE</button></a>', unsafe_allow_html=True)
