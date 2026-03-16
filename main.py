@@ -30,7 +30,7 @@ if not st.session_state.user_cpf:
         s = st.text_input("Senha", type="password", key="cad_senha")
         if st.button("Finalizar Cadastro", key="btn_cad"):
             if n and c and s:
-                conn.table("usuarios").insert([{"tipo": tp, "nome": n, "cpf": c, "senha": s, "preco_km": 1.70}]).execute()
+                conn.table("usuarios").insert([{"tipo": tp, "nome": n, "cpf": c, "senha": s, "preco_km": 2.00}]).execute()
                 st.success("✅ Cadastrado! Agora vá na aba Entrar.")
             else: st.warning("Preencha todos os campos!")
 
@@ -47,127 +47,91 @@ if not st.session_state.user_cpf:
                 st.session_state.user_nome = user['nome']
                 st.session_state.user_tipo = user['tipo']
                 st.rerun()
-            else: st.error("Dados incorretos ou usuário não encontrado.")
+            else: st.error("Dados incorretos.")
 
 # --- PAINEL LOGADO ---
 else:
     st.sidebar.write(f"👤 **{st.session_state.user_nome}**")
-    st.sidebar.write(f"🏷️ {st.session_state.user_tipo}")
     if st.sidebar.button("🔄 ATUALIZAR", key="side_refresh"): st.rerun()
     st.sidebar.button("🚪 Sair", on_click=logout, key="side_logout")
 
     # --- VISÃO PASSAGEIRO ---
     if st.session_state.user_tipo == "Sou Passageiro":
         st.title("Painel do Passageiro 📍")
-        
-        # Busca corridas ativas do passageiro
         res = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
         
         if res.data:
             c = res.data[0]
-            st.info(f"Status Atual: **{c['status']}**")
-            
             if c['status'] == "Buscando":
-                st.warning("Aguardando motoristas interessados...")
+                st.info("Aguardando motoristas...")
                 if st.button("Cancelar Chamada ❌"):
                     conn.table("corridas").delete().eq("id", c['id']).execute()
                     st.rerun()
-
             elif c['status'] == "Negociando":
-                st.subheader("⚠️ Nova Proposta Recebida!")
-                st.write(f"O motorista **{c['motorista_nome']}** sugeriu um novo valor.")
-                st.metric("VALOR DO MOTORISTA", f"R$ {c['valor_total']:.2f}")
-                
+                st.warning(f"O motorista {c['motorista_nome']} propôs R$ {c['valor_total']:.2f}")
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("ACEITAR ✅", use_container_width=True):
+                    if st.button("ACEITAR ✅"):
                         conn.table("corridas").update({"status": "Confirmada"}).eq("id", c['id']).execute()
                         st.rerun()
                 with col2:
-                    if st.button("RECUSAR/CANCELAR ❌", use_container_width=True):
+                    if st.button("RECUSAR ❌"):
                         conn.table("corridas").delete().eq("id", c['id']).execute()
                         st.rerun()
-
             elif c['status'] == "Confirmada":
-                st.success(f"Motorista {c['motorista_nome']} está a caminho!")
-                st.metric("VALOR FECHADO", f"R$ {c['valor_total']:.2f}")
-                st.write(f"📍 De: {c['ponto_origem']} \n🏁 Para: {c['ponto_destino']}")
-        
+                st.success(f"Motorista {c['motorista_nome']} a caminho! Valor: R$ {c['valor_total']:.2f}")
         else:
-            # Formulário para nova corrida
-            with st.container(border=True):
-                o = st.text_input("Onde você está?", placeholder="Ex: Rua das Flores, 123")
-                d = st.text_input("Para onde vamos?", placeholder="Ex: Shopping Central")
-                v = st.number_input("Sua oferta inicial (R$)", min_value=5.0, value=15.0, step=1.0)
-                
-                if st.button("SOLICITAR CORRIDA 🚀", use_container_width=True):
-                    if o and d:
-                        conn.table("corridas").insert([{
-                            "passageiro": st.session_state.user_nome, 
-                            "ponto_origem": o, 
-                            "ponto_destino": d, 
-                            "valor_total": v,
-                            "status": "Buscando"
-                        }]).execute()
-                        st.rerun()
+            o = st.text_input("Onde você está?")
+            d = st.text_input("Para onde vamos?")
+            v = st.number_input("Sua oferta (R$)", min_value=5.0, value=15.0)
+            if st.button("SOLICITAR 🚀"):
+                conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": o, "ponto_destino": d, "valor_total": v, "status": "Buscando"}]).execute()
+                st.rerun()
 
     # --- VISÃO MOTORISTA ---
     elif st.session_state.user_tipo == "Sou Motorista":
         st.title("Painel do Motorista 🛣️")
         
-        # Verifica se o motorista já está em uma corrida confirmada
+        # --- 1. CONFIGURAÇÃO DE GANHO POR KM ---
+        with st.expander("⚙️ Configurar Meu Ganho por KM"):
+            ganho_km = st.slider("Quanto você quer ganhar por KM?", 1.70, 7.00, 2.50, step=0.10)
+            st.caption(f"Seu valor base atual: R$ {ganho_km:.2f}/km")
+
         minha_corrida = conn.table("corridas").select("*").eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
         
         if minha_corrida.data:
             c = minha_corrida.data[0]
-            st.success(f"VIAGEM EM ANDAMENTO COM {c['passageiro']}")
-            st.write(f"💰 Valor: R$ {c['valor_total']:.2f}")
-            
-            end_dest = urllib.parse.quote(c['ponto_destino'])
-            st.markdown(f"""
-                <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px;">
-                    <a href="waze://?q={end_dest}&navigate=yes" style="text-decoration: none;">
-                        <div style="background:#33ccff;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;">🚗 ABRIR WAZE</div>
-                    </a>
-                    <a href="https://www.google.com{end_dest}" style="text-decoration: none;">
-                        <div style="background:#4285F4;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;">📍 GOOGLE MAPS</div>
-                    </a>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            if st.button("🏁 FINALIZAR CORRIDA", use_container_width=True, type="primary"):
+            st.success(f"EM VIAGEM COM {c['passageiro']}")
+            if st.button("🏁 FINALIZAR CORRIDA"):
                 conn.table("corridas").update({"status": "Finalizada"}).eq("id", c['id']).execute()
                 st.rerun()
-        
         else:
             st.subheader("Chamadas Disponíveis")
             corridas = conn.table("corridas").select("*").in_("status", ["Buscando", "Negociando"]).execute()
             
-            if not corridas.data:
-                st.info("Nenhuma chamada no momento. Aguarde...")
-            
             for r in corridas.data:
                 with st.container(border=True):
-                    st.write(f"👤 **{r['passageiro']}**")
+                    st.write(f"👤 **{r['passageiro']}** | Oferta: **R$ {r['valor_total']:.2f}**")
                     st.write(f"📍 {r['ponto_origem']} ➡️ {r['ponto_destino']}")
-                    st.write(f"💰 Oferta atual: **R$ {r['valor_total']:.2f}**")
                     
+                    # Links para o Waze ver a distância real
+                    end_dest = urllib.parse.quote(r['ponto_destino'])
+                    st.markdown(f"[🔍 Ver distância no Waze](waze://?q={end_dest})")
+
+                    # --- 2. CALCULADORA DE PROPOSTA ---
+                    st.write("---")
+                    st.write("🧮 **Calculadora de Contraproposta**")
+                    distancia = st.number_input(f"Distância da viagem (km) para #{r['id']}", min_value=0.1, step=0.1, key=f"dist_{r['id']}")
+                    valor_calc = distancia * ganho_km
+                    st.info(f"Sugestão baseada no seu KM: **R$ {valor_calc:.2f}**")
+
                     col1, col2 = st.columns(2)
                     with col1:
                         if st.button(f"ACEITAR R${r['valor_total']}", key=f"acc_{r['id']}"):
-                            conn.table("corridas").update({
-                                "status": "Confirmada", 
-                                "motorista_nome": st.session_state.user_nome
-                            }).eq("id", r['id']).execute()
+                            conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
                             st.rerun()
-                    
                     with col2:
-                        contra = st.number_input("Contraproposta", min_value=float(r['valor_total']+1), value=float(r['valor_total']+3), key=f"v_{r['id']}")
-                        if st.button(f"ENVIAR R${contra}", key=f"prop_{r['id']}"):
-                            conn.table("corridas").update({
-                                "valor_total": contra,
-                                "status": "Negociando",
-                                "motorista_nome": st.session_state.user_nome
-                            }).eq("id", r['id']).execute()
+                        contra = st.number_input("Valor da Proposta (R$)", value=float(max(r['valor_total'], valor_calc)), key=f"v_{r['id']}")
+                        if st.button(f"ENVIAR PROPOSTA", key=f"prop_{r['id']}"):
+                            conn.table("corridas").update({"valor_total": contra, "status": "Negociando", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
                             st.rerun()
-
