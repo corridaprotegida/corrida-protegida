@@ -29,9 +29,18 @@ def get_route_points(start_coords, end_coords):
         url = f"http://router.project-osrm.org{start_coords[1]},{start_coords[0]};{end_coords[1]},{end_coords[0]}?overview=full&geometries=geojson"
         r = requests.get(url).json()
         coords = r['routes'][0]['geometry']['coordinates']
-        return [(p[1], p[0]) for p in coords] # Inverte para (Lat, Lon)
+        return [(p[1], p[0]) for p in coords] 
     except:
-        return [start_coords, end_coords] # Fallback para linha reta se der erro
+        return [start_coords, end_coords]
+
+def criar_mapa_estilo_google(centro, zoom=14):
+    """Cria um mapa com as imagens (tiles) do Google Maps"""
+    return folium.Map(
+        location=centro,
+        zoom_start=zoom,
+        tiles='https://mt1.google.com{x}&y={y}&z={z}',
+        attr='Google Maps'
+    )
 
 def logout():
     if st.session_state.get("user_cpf"):
@@ -63,7 +72,7 @@ if not st.session_state.user_cpf:
         if st.button("Acessar Sistema"):
             res = conn.table("usuarios").select("*").eq("cpf", lc).eq("senha", ls).eq("tipo", tl).execute()
             if res.data and len(res.data) > 0:
-                u = res.data[0] # CORREÇÃO: Acessa o primeiro item da lista
+                u = res.data[0]
                 st.session_state.update({"user_cpf": u['cpf'], "user_nome": u['nome'], "user_tipo": u['tipo']})
                 conn.table("usuarios").update({"logado": True}).eq("cpf", u['cpf']).execute()
                 st.rerun()
@@ -82,7 +91,7 @@ else:
         if res.data:
             c = res.data[0]
             st.warning(f"Status: {c['status']}")
-            m_track = folium.Map(location=[-25.0916, -50.1668], zoom_start=13)
+            m_track = criar_mapa_estilo_google([-25.0916, -50.1668], 13)
             if c.get('lat_motorista'):
                 folium.Marker([c['lat_motorista'], c['lon_motorista']], icon=folium.Icon(color='blue', icon='car', prefix='fa')).add_to(m_track)
             st_folium(m_track, height=300, width=700, key="map_track")
@@ -99,15 +108,15 @@ else:
                     valor = max(6.0, dist * 2.8)
                     st.info(f"📏 {dist:.2f} km | 💰 R$ {valor:.2f}")
                     
-                    # MAPA COM ROTA REAL (CURVAS NAS RUAS)
+                    # MAPA ESTILO GOOGLE COM ROTA NAS RUAS
                     rota = get_route_points(c_o, c_d)
-                    m = folium.Map(location=c_o, zoom_start=14)
-                    folium.Marker(c_o, icon=folium.Icon(color='green')).add_to(m)
-                    folium.Marker(c_d, icon=folium.Icon(color='red')).add_to(m)
-                    folium.PolyLine(rota, color="blue", weight=5, opacity=0.8).add_to(m)
-                    st_folium(m, height=300, width=700, key="map_req")
+                    m = criar_mapa_estilo_google(c_o, 14)
+                    folium.Marker(c_o, icon=folium.Icon(color='green', icon='play')).add_to(m)
+                    folium.Marker(c_d, icon=folium.Icon(color='red', icon='stop')).add_to(m)
+                    folium.PolyLine(rota, color="#4285F4", weight=6, opacity=0.8).add_to(m) # Azul Google
+                    st_folium(m, height=400, width=700, key="map_req")
 
-                    if st.button("CHAMAR AGORA 🚀"):
+                    if st.button("CHAMAR AGORA 🚀", use_container_width=True):
                         conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": o_txt, "ponto_destino": d_txt, "distancia_km": dist, "valor_total": valor, "status": "Buscando"}]).execute()
                         st.rerun()
 
