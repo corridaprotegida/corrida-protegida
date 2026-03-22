@@ -33,14 +33,9 @@ def get_route_points(start_coords, end_coords):
     except:
         return [start_coords, end_coords]
 
-def criar_mapa_estilo_google(centro, zoom=14):
-    """Cria um mapa com as imagens (tiles) do Google Maps"""
-    return folium.Map(
-        location=centro,
-        zoom_start=zoom,
-        tiles='https://mt1.google.com{x}&y={y}&z={z}',
-        attr='Google Maps'
-    )
+def criar_mapa(centro, zoom=14):
+    """Cria mapa estável (OpenStreetMap) para evitar tela branca"""
+    return folium.Map(location=centro, zoom_start=zoom, tiles="OpenStreetMap")
 
 def logout():
     if st.session_state.get("user_cpf"):
@@ -72,7 +67,7 @@ if not st.session_state.user_cpf:
         if st.button("Acessar Sistema"):
             res = conn.table("usuarios").select("*").eq("cpf", lc).eq("senha", ls).eq("tipo", tl).execute()
             if res.data and len(res.data) > 0:
-                u = res.data[0]
+                u = res.data[0] # Acessa o primeiro item da lista
                 st.session_state.update({"user_cpf": u['cpf'], "user_nome": u['nome'], "user_tipo": u['tipo']})
                 conn.table("usuarios").update({"logado": True}).eq("cpf", u['cpf']).execute()
                 st.rerun()
@@ -86,12 +81,12 @@ else:
     # --- VISÃO PASSAGEIRO ---
     if st.session_state.user_tipo == "Sou Passageiro":
         st.title("Pedir Corrida 📍")
-        res = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
+        res_c = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
         
-        if res.data:
-            c = res.data[0]
+        if res_c.data:
+            c = res_c.data[0]
             st.warning(f"Status: {c['status']}")
-            m_track = criar_mapa_estilo_google([-25.0916, -50.1668], 13)
+            m_track = criar_mapa([-25.0916, -50.1668], 13)
             if c.get('lat_motorista'):
                 folium.Marker([c['lat_motorista'], c['lon_motorista']], icon=folium.Icon(color='blue', icon='car', prefix='fa')).add_to(m_track)
             st_folium(m_track, height=300, width=700, key="map_track")
@@ -99,8 +94,8 @@ else:
                 conn.table("corridas").delete().eq("id", c['id']).execute()
                 st.rerun()
         else:
-            o_txt = st.text_input("Origem (Ex: Terminal Uvaranas)")
-            d_txt = st.text_input("Destino (Ex: Rua Robalo 296)")
+            o_txt = st.text_input("Origem", placeholder="Ex: Terminal Uvaranas")
+            d_txt = st.text_input("Destino", placeholder="Ex: Rua Robalo 296")
             if o_txt and d_txt:
                 c_o, c_d = get_coords(o_txt), get_coords(d_txt)
                 if c_o and c_d:
@@ -108,12 +103,11 @@ else:
                     valor = max(6.0, dist * 2.8)
                     st.info(f"📏 {dist:.2f} km | 💰 R$ {valor:.2f}")
                     
-                    # MAPA ESTILO GOOGLE COM ROTA NAS RUAS
                     rota = get_route_points(c_o, c_d)
-                    m = criar_mapa_estilo_google(c_o, 14)
+                    m = criar_mapa(c_o, 14)
                     folium.Marker(c_o, icon=folium.Icon(color='green', icon='play')).add_to(m)
                     folium.Marker(c_d, icon=folium.Icon(color='red', icon='stop')).add_to(m)
-                    folium.PolyLine(rota, color="#4285F4", weight=6, opacity=0.8).add_to(m) # Azul Google
+                    folium.PolyLine(rota, color="blue", weight=5, opacity=0.8).add_to(m)
                     st_folium(m, height=400, width=700, key="map_req")
 
                     if st.button("CHAMAR AGORA 🚀", use_container_width=True):
