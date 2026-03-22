@@ -8,147 +8,118 @@ from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import pandas as pd
 import requests
-import urllib.parse
+import time
 
-# --- CONFIGURAÇÃO INICIAL ---
+# --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="Corrida Protegida 🛡️", layout="centered")
 conn = st.connection("supabase", type=SupabaseConnection)
-
-# Atualização automática a cada 5 segundos para sincronizar as telas
 st_autorefresh(interval=5000, key="global_refresh")
 
-# --- FUNÇÕES DE MAPA E ROTA ---
+# --- FUNÇÕES ---
 def get_coords(endereco):
     if not endereco or len(endereco) < 3: return None
     try:
-        geolocator = Nominatim(user_agent="corrida_protegida_pg_final")
-        location = geolocator.geocode(f"{endereco}, Ponta Grossa, PR")
+        geolocator = Nominatim(user_agent="corrida_protegida_mobile")
+        location = geolocator.geocode(f"{endereco}, Ponta Grossa, PR", timeout=10)
         return (location.latitude, location.longitude) if location else None
     except: return None
 
-def get_route_points(start_coords, end_coords):
-    """Busca o traçado das ruas via OSRM (Grátis)"""
+def get_route_points(start, end):
     try:
-        url = f"http://router.project-osrm.org{start_coords[1]},{start_coords[0]};{end_coords[1]},{end_coords[0]}?overview=full&geometries=geojson"
-        r = requests.get(url).json()
-        coords = r['routes'][0]['geometry']['coordinates']
-        return [(p[1], p[0]) for p in coords] 
-    except:
-        return [start_coords, end_coords]
+        url = f"http://router.project-osrm.org{start[1]},{start[0]};{end[1]},{end[0]}?overview=full&geometries=geojson"
+        r = requests.get(url, timeout=5).json()
+        return [(p[1], p[0]) for p in r['routes'][0]['geometry']['coordinates']]
+    except: return [start, end]
 
-def logout():
-    if st.session_state.get("user_cpf"):
-        try: conn.table("usuarios").update({"logado": False}).eq("cpf", st.session_state.user_cpf).execute()
-        except: pass
-    for key in list(st.session_state.keys()): del st.session_state[key]
-    st.rerun()
-
-# --- ESTADO DA SESSÃO ---
+# --- LOGIN ---
 if "user_cpf" not in st.session_state:
     st.session_state.update({"user_cpf": None, "user_nome": None, "user_tipo": None})
 
-# --- TELA DE ACESSO ---
 if not st.session_state.user_cpf:
-    st.title("🛡️ CORRIDA PROTEGIDA")
-    t1, t2 = st.tabs(["🔐 Entrar", "📝 Cadastrar"])
-    
-    with t2:
-        tp = st.radio("Eu sou:", ["Sou Passageiro", "Sou Motorista"], horizontal=True)
-        n, c, s = st.text_input("Nome"), st.text_input("CPF"), st.text_input("Senha", type="password")
-        pix = st.text_input("Chave PIX") if tp == "Sou Motorista" else ""
-        if st.button("Cadastrar"):
-            conn.table("usuarios").insert([{"tipo": tp, "nome": n, "cpf": c, "senha": s, "chave_pix": pix}]).execute()
-            st.success("✅ Conta criada! Agora faça login.")
-
-    with t1:
-        tl = st.radio("Entrar como:", ["Sou Passageiro", "Sou Motorista", "Administrador"], horizontal=True)
-        lc, ls = st.text_input("CPF", key="l_c"), st.text_input("Senha", type="password", key="l_s")
-        if st.button("Acessar Sistema"):
-            res = conn.table("usuarios").select("*").eq("cpf", lc).eq("senha", ls).eq("tipo", tl).execute()
-            if res.data and len(res.data) > 0:
-                u = res.data[0]
-                st.session_state.update({"user_cpf": u['cpf'], "user_nome": u['nome'], "user_tipo": u['tipo']})
-                conn.table("usuarios").update({"logado": True}).eq("cpf", u['cpf']).execute()
-                st.rerun()
-            else: st.error("❌ Dados incorretos ou perfil errado.")
-
-# --- PAINEL LOGADO ---
+    st.title("🛡️ ACESSO RÁPIDO")
+    tl = st.radio("Perfil:", ["Sou Passageiro", "Sou Motorista", "Administrador"], horizontal=True)
+    lc = st.text_input("CPF")
+    ls = st.text_input("Senha", type="password")
+    if st.button("ENTRAR AGORA", use_container_width=True):
+        res = conn.table("usuarios").select("*").eq("cpf", lc).eq("senha", ls).eq("tipo", tl).execute()
+        if res.data:
+            u = res.data[0]
+            st.session_state.update({"user_cpf": u['cpf'], "user_nome": u['nome'], "user_tipo": u['tipo']})
+            st.rerun()
+        else: st.error("Dados incorretos.")
 else:
-    st.sidebar.write(f"👤 **{st.session_state.user_nome}**")
-    if st.sidebar.button("🚪 Sair"): logout()
-    
-    perfil = st.session_state.user_tipo
+    # --- INTERFACE LOGADA ---
+    st.sidebar.write(f"👤 {st.session_state.user_nome}")
+    if st.sidebar.button("Sair"):
+        for k in list(st.session_state.keys()): del st.session_state[k]
+        st.rerun()
 
     # --- VISÃO PASSAGEIRO ---
-    if perfil == "Sou Passageiro":
-        st.title("Pedir Corrida 📍")
-        res_c = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
+    if st.session_state.user_tipo == "Sou Passageiro":
+        st.subheader("📍 Solicitar Viagem")
         
-        if res_c.data:
-            c = res_c.data[0]
-            st.warning(f"Status: {c['status']}")
-            m_track = folium.Map(location=[-25.0916, -50.1668], zoom_start=13)
+        # Busca se já tem corrida
+        corrida = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
+        
+        if corrida.data:
+            c = corrida.data[0]
+            st.info(f"Status: {c['status']}")
+            if c['motorista_nome']: st.success(f"Motorista: {c['motorista_nome']}")
+            
+            # Mapa de Acompanhamento
+            m_a = folium.Map(location=[-25.09, -50.16], zoom_start=13)
             if c.get('lat_motorista'):
-                folium.Marker([c['lat_motorista'], c['lon_motorista']], icon=folium.Icon(color='blue', icon='car', prefix='fa')).add_to(m_track)
-            st_folium(m_track, height=300, width=700, key="map_track")
-            if st.button("Cancelar Corrida"):
+                folium.Marker([c['lat_motorista'], c['lon_motorista']], icon=folium.Icon(color='blue', icon='car', prefix='fa')).add_to(m_a)
+            st_folium(m_a, height=300, width=700, key=f"map_track_{c['id']}")
+            
+            if st.button("CANCELAR CORRIDA ❌", use_container_width=True):
                 conn.table("corridas").delete().eq("id", c['id']).execute()
                 st.rerun()
         else:
-            o_txt = st.text_input("Origem", placeholder="Ex: Terminal Uvaranas")
-            d_txt = st.text_input("Destino", placeholder="Ex: Rua Robalo 296")
-            if o_txt and d_txt:
-                c_o, c_d = get_coords(o_txt), get_coords(d_txt)
-                if c_o and c_d:
-                    dist = geodesic(c_o, c_d).km
-                    valor = max(6.0, dist * 2.8)
-                    st.info(f"📏 {dist:.2f} km | 💰 R$ {valor:.2f}")
-                    rota = get_route_points(c_o, c_d)
-                    m = folium.Map(location=c_o, zoom_start=14)
-                    folium.Marker(c_o, icon=folium.Icon(color='green')).add_to(m)
-                    folium.Marker(c_d, icon=folium.Icon(color='red')).add_to(m)
-                    folium.PolyLine(rota, color="blue", weight=5).add_to(m)
-                    st_folium(m, height=350, width=700, key="map_pax")
-                    if st.button("CHAMAR AGORA 🚀", use_container_width=True):
-                        conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": o_txt, "ponto_destino": d_txt, "distancia_km": dist, "valor_total": valor, "status": "Buscando"}]).execute()
+            origem = st.text_input("Sua Localização")
+            destino = st.text_input("Para onde vamos?")
+            
+            if origem and destino:
+                co, cd = get_coords(origem), get_coords(destino)
+                if co and cd:
+                    dist = geodesic(co, cd).km
+                    valor = max(7.0, dist * 3.0)
+                    st.write(f"📏 {dist:.1f}km | 💰 **R$ {valor:.2f}**")
+                    
+                    # Rota
+                    rota = get_route_points(co, cd)
+                    m_p = folium.Map(location=co, zoom_start=14)
+                    folium.PolyLine(rota, color="blue", weight=5).add_to(m_p)
+                    folium.Marker(co, icon=folium.Icon(color='green')).add_to(m_p)
+                    folium.Marker(cd, icon=folium.Icon(color='red')).add_to(m_p)
+                    
+                    # Key dinâmica para não travar no celular
+                    st_folium(m_p, height=300, width=700, key=f"map_pax_{int(time.time())}")
+                    
+                    if st.button("CONFIRMAR SOLICITAÇÃO 🚀", use_container_width=True):
+                        conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": origem, "ponto_destino": destino, "distancia_km": dist, "valor_total": valor, "status": "Buscando"}]).execute()
                         st.rerun()
 
     # --- VISÃO MOTORISTA ---
-    elif perfil == "Sou Motorista":
-        st.title("Chamadas Disponíveis 🛣️")
-        loc = get_geolocation()
-        if loc:
-            lat_m, lon_m = loc['coords']['latitude'], loc['coords']['longitude']
-            conn.table("corridas").update({"lat_motorista": lat_m, "lon_motorista": lon_m}).eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
+    elif st.session_state.user_tipo == "Sou Motorista":
+        st.subheader("🛣️ Chamadas Próximas")
+        # GPS
+        gps = get_geolocation()
+        if gps:
+            lat, lon = gps['coords']['latitude'], gps['coords']['longitude']
+            conn.table("corridas").update({"lat_motorista": lat, "lon_motorista": lon}).eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
 
         disponiveis = conn.table("corridas").select("*").eq("status", "Buscando").execute()
         for r in disponiveis.data:
             with st.container(border=True):
-                st.write(f"👤 {r['passageiro']} | **R$ {r['valor_total']:.2f}**")
-                c_o = get_coords(r['ponto_origem'])
-                c_d = get_coords(r['ponto_destino'])
-                if c_o and c_d:
-                    rota_m = get_route_points(c_o, c_d)
-                    m_moto = folium.Map(location=c_o, zoom_start=13)
-                    folium.Marker(c_o, icon=folium.Icon(color='green', icon='user', prefix='fa')).add_to(m_moto)
-                    folium.Marker(c_d, icon=folium.Icon(color='red', icon='flag', prefix='fa')).add_to(m_moto)
-                    folium.PolyLine(rota_m, color="orange", weight=5).add_to(m_moto)
-                    st_folium(m_moto, height=250, width=650, key=f"map_moto_{r['id']}")
+                st.write(f"💰 **R$ {r['valor_total']:.2f}** ({r['distancia_km']:.1f}km)")
+                st.caption(f"De: {r['ponto_origem']}\nPara: {r['ponto_destino']}")
+                if st.button(f"ACEITAR #{r['id']}", key=f"acc_{r['id']}", use_container_width=True):
+                    conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
+                    st.rerun()
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button(f"✅ Aceitar #{r['id']}", use_container_width=True):
-                        conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
-                        st.rerun()
-                with col2:
-                    addr = urllib.parse.quote(r['ponto_origem'])
-                    st.markdown(f'<a href="https://www.google.com{addr}" target="_blank"><button style="width:100%; background-color:#34a853; color:white; border:none; padding:8px; border-radius:5px; font-weight:bold;">📍 VER NO MAPS</button></a>', unsafe_allow_html=True)
-
-    # --- VISÃO ADMINISTRADOR ---
-    elif perfil == "Administrador":
-        st.title("🛡️ Admin")
-        ativas = conn.table("corridas").select("*").execute()
-        st.dataframe(pd.DataFrame(ativas.data) if ativas.data else [])
-        if st.button("Limpar Sistema"):
-            conn.table("corridas").delete().neq("id", 0).execute()
-            st.rerun()
+    # --- VISÃO ADM ---
+    elif st.session_state.user_tipo == "Administrador":
+        st.title("ADM")
+        corridas = conn.table("corridas").select("*").execute()
+        st.dataframe(pd.DataFrame(corridas.data) if corridas.data else [])
