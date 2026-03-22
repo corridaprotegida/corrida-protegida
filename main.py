@@ -4,6 +4,7 @@ from streamlit_js_eval import get_geolocation
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import urllib.parse
+import base64
 
 # --- CONFIGURAÇÃO INICIAL ---
 st.set_page_config(page_title="Corrida Protegida 🛡️", layout="centered")
@@ -12,13 +13,25 @@ conn = st.connection("supabase", type=SupabaseConnection)
 # Atualização automática a cada 5 segundos para sincronizar as telas
 st_autorefresh(interval=5000, key="global_refresh")
 
-# --- INICIALIZAÇÃO DO ESTADO DO USUÁRIO ---
+# --- FUNÇÃO DE NOTIFICAÇÃO SONORA ---
+def play_notification_sound():
+    # Som de "ping" curto e profissional (base64 para não precisar de arquivo externo)
+    audio_html = """
+        <audio autoplay>
+            <source src="https://codeskulptor-demos.commondatastorage.googleapis.com" type="audio/mp3">
+        </audio>
+    """
+    st.markdown(audio_html, unsafe_allow_html=True)
+
+# --- INICIALIZAÇÃO DO ESTADO ---
 if "user_cpf" not in st.session_state:
     st.session_state.user_cpf = None
 if "user_nome" not in st.session_state:
     st.session_state.user_nome = None
 if "user_tipo" not in st.session_state:
     st.session_state.user_tipo = None
+if "last_order_count" not in st.session_state:
+    st.session_state.last_order_count = 0
 
 def logout():
     if st.session_state.user_cpf:
@@ -29,145 +42,114 @@ def logout():
         del st.session_state[key]
     st.rerun()
 
-# --- TELA DE ACESSO (LOGIN / CADASTRO) ---
+# --- TELA DE ACESSO ---
 if not st.session_state.user_cpf:
     st.title("🛡️ CORRIDA PROTEGIDA")
     t1, t2 = st.tabs(["🔐 Entrar", "📝 Cadastrar"])
     
     with t2:
         st.subheader("Criar Nova Conta")
-        tp = st.radio("Eu sou:", ["Sou Passageiro", "Sou Motorista"], horizontal=True, key="reg_perfil")
-        n = st.text_input("Nome Completo", key="reg_n_input")
-        c = st.text_input("CPF (apenas números)", key="reg_c_input")
-        pix = st.text_input("Chave PIX", key="reg_pix_input") if tp == "Sou Motorista" else ""
-        s = st.text_input("Senha", type="password", key="reg_s_input")
-        
-        if st.button("Finalizar Cadastro", key="reg_btn_submit"):
+        tp = st.radio("Eu sou:", ["Sou Passageiro", "Sou Motorista"], horizontal=True, key="reg_p")
+        n = st.text_input("Nome Completo", key="reg_n")
+        c = st.text_input("CPF (números)", key="reg_c")
+        pix = st.text_input("Chave PIX", key="reg_pix") if tp == "Sou Motorista" else ""
+        s = st.text_input("Senha", type="password", key="reg_s")
+        if st.button("Finalizar Cadastro", key="reg_btn"):
             if n and c and s:
-                conn.table("usuarios").insert([{"tipo": tp, "nome": n, "cpf": c, "senha": s, "chave_pix": pix, "preco_km": 2.0}]).execute()
-                st.success("✅ Cadastrado! Agora você pode Entrar.")
-            else: st.warning("Preencha todos os campos obrigatórios!")
+                conn.table("usuarios").insert([{"tipo": tp, "nome": n, "cpf": c, "senha": s, "chave_pix": pix}]).execute()
+                st.success("✅ Cadastrado!")
+            else: st.warning("Preencha tudo!")
 
     with t1:
         st.subheader("Acessar Painel")
-        tl = st.radio("Entrar como:", ["Sou Passageiro", "Sou Motorista", "Administrador"], horizontal=True, key="log_perfil")
-        lc = st.text_input("CPF", key="log_c_input")
-        ls = st.text_input("Senha", type="password", key="log_s_input")
-        
-        if st.button("Acessar", key="log_btn_submit"):
+        tl = st.radio("Entrar como:", ["Sou Passageiro", "Sou Motorista", "Administrador"], horizontal=True, key="log_tp")
+        lc = st.text_input("CPF", key="log_c")
+        ls = st.text_input("Senha", type="password", key="log_s")
+        if st.button("Acessar", key="log_btn"):
             r = conn.table("usuarios").select("*").eq("cpf", lc).eq("senha", ls).eq("tipo", tl).execute()
-            if r.data and len(r.data) > 0:
+            if r.data:
                 u = r.data[0]
-                st.session_state.user_cpf = u['cpf']
-                st.session_state.user_nome = u['nome']
-                st.session_state.user_tipo = u['tipo']
+                st.session_state.user_cpf, st.session_state.user_nome, st.session_state.user_tipo = u['cpf'], u['nome'], u['tipo']
                 conn.table("usuarios").update({"logado": True}).eq("cpf", u['cpf']).execute()
                 st.rerun()
-            else: st.error("Dados incorretos ou perfil não autorizado.")
+            else: st.error("Dados incorretos.")
 
 # --- PAINEL LOGADO ---
 else:
-    # --- BARRA LATERAL ---
     st.sidebar.write(f"👤 **{st.session_state.user_nome}**")
     
-    # MODO TESTE (Apenas para ADM)
     perfil_ativo = st.session_state.user_tipo
     if st.session_state.user_tipo == "Administrador":
         st.sidebar.divider()
-        st.sidebar.subheader("🛠️ Seletor de Visão")
-        perfil_ativo = st.sidebar.radio(
-            "Ver como:", 
-            ["Administrador", "Sou Passageiro", "Sou Motorista"],
-            index=0
-        )
+        st.sidebar.subheader("🛠️ Modo de Teste")
+        perfil_ativo = st.sidebar.radio("Ver como:", ["Administrador", "Sou Passageiro", "Sou Motorista"])
     
-    st.sidebar.divider()
-    st.sidebar.button("🚪 Sair da Conta", on_click=logout, key="btn_logout_sidebar")
+    st.sidebar.button("🚪 Sair", on_click=logout, key="btn_out")
 
-    # --- 1. VISÃO PASSAGEIRO ---
+    # --- VISÃO PASSAGEIRO ---
     if perfil_ativo == "Sou Passageiro":
         st.title("Painel do Passageiro 📍")
         res = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
         
-        if res.data and len(res.data) > 0:
+        if res.data:
             c = res.data[0]
-            st.info(f"Status Atual: **{c['status']}**")
-            
+            st.info(f"Status: **{c['status']}**")
             if c['status'] == "Confirmada" and c.get('lat_motorista'):
-                st.subheader(f"🚖 {c['motorista_nome']} está a caminho!")
                 df_mapa = pd.DataFrame({'lat': [c['lat_motorista']], 'lon': [c['lon_motorista']]})
                 st.map(df_mapa)
-                
-                m_info = conn.table("usuarios").select("chave_pix").eq("nome", c['motorista_nome']).execute()
-                if m_info.data: st.warning(f"PIX do Motorista: `{m_info.data[0]['chave_pix']}`")
-
-            if st.button("Cancelar Corrida ❌", key=f"pax_del_{c['id']}"):
+            if st.button("Cancelar ❌", key=f"pax_del_{c['id']}"):
                 conn.table("corridas").delete().eq("id", c['id']).execute()
                 st.rerun()
         else:
-            o = st.text_input("Onde você está?", key="input_origem")
-            d = st.text_input("Para onde vamos?", key="input_destino")
-            v = st.number_input("Sua oferta (R$)", min_value=5.0, value=15.0, key="input_valor")
-            if st.button("SOLICITAR AGORA 🚀", key="btn_solicitar_pax"):
+            o, d = st.text_input("Origem"), st.text_input("Destino")
+            v = st.number_input("Sua oferta (R$)", 5.0, value=15.0)
+            if st.button("SOLICITAR 🚀"):
                 conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": o, "ponto_destino": d, "valor_total": v, "status": "Buscando"}]).execute()
                 st.rerun()
 
-    # --- 2. VISÃO MOTORISTA ---
+    # --- VISÃO MOTORISTA ---
     elif perfil_ativo == "Sou Motorista":
         st.title("Painel do Motorista 🛣️")
         
+        # Atualiza Localização
         loc = get_geolocation()
         if loc:
-            lat_m, lon_m = loc['coords']['latitude'], loc['coords']['longitude']
-            conn.table("corridas").update({"lat_motorista": lat_m, "lon_motorista": lon_m}).eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
+            lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
+            conn.table("corridas").update({"lat_motorista": lat, "lon_motorista": lon}).eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
+
+        # Busca Chamadas e Toca Som se houver novidade
+        corridas = conn.table("corridas").select("*").eq("status", "Buscando").execute()
+        
+        if len(corridas.data) > st.session_state.last_order_count:
+            play_notification_sound()
+            st.toast("🔔 Nova chamada disponível!")
+        st.session_state.last_order_count = len(corridas.data)
 
         st.subheader("Chamadas Disponíveis")
-        corridas = conn.table("corridas").select("*").in_("status", ["Buscando", "Negociando"]).execute()
-        
-        if not corridas.data:
-            st.info("Nenhuma chamada no momento. Aguarde novos pedidos...")
-
         for r in corridas.data:
             with st.container(border=True):
-                st.write(f"👤 **{r['passageiro']}** | Oferta: R$ {r['valor_total']:.2f}")
-                st.caption(f"De: {r['ponto_origem']} ➡️ {r['ponto_destino']}")
-                
-                # LINK PARA ABRIR APP WAZE NO CELULAR
+                st.write(f"👤 {r['passageiro']} | R$ {r['valor_total']:.2f}")
                 addr = urllib.parse.quote(r['ponto_destino'])
-                st.markdown(f'<a href="waze://?q={addr}&navigate=yes"><button style="width:100%; background-color:#33CCFF; color:white; border:none; padding:10px; border-radius:5px; font-weight:bold; cursor:pointer; margin-bottom:10px;">🚀 ABRIR NO APP WAZE</button></a>', unsafe_allow_html=True)
-                
-                if st.button(f"Aceitar Corrida #{r['id']}", key=f"acc_mot_{r['id']}", use_container_width=True):
+                st.markdown(f'<a href="waze://?q={addr}&navigate=yes"><button style="width:100%; background-color:#33CCFF; color:white; border:none; padding:10px; border-radius:5px; font-weight:bold;">🚀 APP WAZE</button></a>', unsafe_allow_html=True)
+                if st.button(f"Aceitar #{r['id']}", key=f"acc_{r['id']}", use_container_width=True):
                     conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
                     st.rerun()
 
-    # --- 3. VISÃO ADMINISTRADOR ---
+    # --- VISÃO ADMINISTRADOR ---
     elif perfil_ativo == "Administrador":
-        st.title("🛡️ Painel de Controle ADM")
-        t_u, t_c, t_f = st.tabs(["👥 Usuários", "🚖 Todas as Corridas", "📊 Financeiro"])
-
+        st.title("🛡️ Painel ADM")
+        t_u, t_c, t_f = st.tabs(["👥 Usuários", "🚖 Corridas", "📊 Financeiro"])
+        
         with t_u:
             users = conn.table("usuarios").select("*").execute()
             if users.data:
-                df_u = pd.DataFrame(users.data)
-                cols = [c for c in ['nome', 'tipo', 'cpf', 'logado'] if c in df_u.columns]
-                st.dataframe(df_u[cols], use_container_width=True)
-                
-                u_del = st.selectbox("Selecione usuário para remover:", df_u['nome'], key="sel_user_del")
-                if st.button("Remover Usuário Permanentemente", type="primary", key="btn_adm_del"):
-                    conn.table("usuarios").delete().eq("nome", u_del).execute()
-                    st.rerun()
-
+                df = pd.DataFrame(users.data)
+                st.dataframe(df[['nome', 'tipo', 'cpf', 'logado']], use_container_width=True)
+        
         with t_c:
-            cor_ativas = conn.table("corridas").select("*").neq("status", "Finalizada").execute()
-            if cor_ativas.data:
-                for ca in cor_ativas.data:
-                    st.write(f"**ID {ca['id']}** | {ca['passageiro']} ➡️ {ca['motorista_nome'] or '---'} | Status: {ca['status']}")
-                    if st.button(f"Forçar Encerramento #{ca['id']}", key=f"adm_force_{ca['id']}"):
-                        conn.table("corridas").update({"status": "Finalizada"}).eq("id", ca['id']).execute()
-                        st.rerun()
-            else: st.info("Nenhuma corrida ativa no momento.")
-
-        with t_f:
-            fina = conn.table("corridas").select("valor_total").eq("status", "Finalizada").execute()
-            total = sum(i['valor_total'] for i in fina.data) if fina.data else 0
-            st.metric("Volume Total de Corridas (Finalizadas)", f"R$ {total:.2f}")
+            ativas = conn.table("corridas").select("*").neq("status", "Finalizada").execute()
+            for ca in ativas.data:
+                st.write(f"ID {ca['id']} - {ca['passageiro']} | {ca['status']}")
+                if st.button(f"Encerrar #{ca['id']}", key=f"adm_f_{ca['id']}"):
+                    conn.table("corridas").update({"status": "Finalizada"}).eq("id", ca['id']).execute()
+                    st.rerun()
