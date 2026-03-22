@@ -11,7 +11,7 @@ import pandas as pd
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Corrida Protegida 🛡️", layout="centered")
 
-# Conexão Supabase
+# Conexão Supabase (URL e KEY devem estar no .streamlit/secrets.toml)
 conn = st.connection("supabase", type=SupabaseConnection)
 
 # Atualização automática a cada 5 segundos
@@ -22,7 +22,7 @@ def get_coords(endereco):
     """Converte texto em coordenadas (Lat, Lon) focando em Ponta Grossa"""
     if not endereco or len(endereco) < 3: return None
     try:
-        geolocator = Nominatim(user_agent="corrida_protegida_test_pg")
+        geolocator = Nominatim(user_agent="corrida_protegida_pg_v2")
         location = geolocator.geocode(f"{endereco}, Ponta Grossa, PR")
         return (location.latitude, location.longitude) if location else None
     except:
@@ -64,11 +64,12 @@ if not st.session_state.user_cpf:
         ls = st.text_input("Senha", type="password", key="login_pw")
         
         if st.button("Acessar Sistema"):
-            # BUSCA NO SUPABASE
+            # BUSCA NO SUPABASE - Retorna uma lista em .data
             res = conn.table("usuarios").select("*").eq("cpf", lc).eq("senha", ls).eq("tipo", tl).execute()
             
             if res.data and len(res.data) > 0:
-                user = res.data[0] # Pega o primeiro item da lista retornada
+                # CORREÇÃO: Acessando o primeiro item da lista [0]
+                user = res.data[0] 
                 st.session_state.user_cpf = user['cpf']
                 st.session_state.user_nome = user['nome']
                 st.session_state.user_tipo = user['tipo']
@@ -90,20 +91,19 @@ else:
         st.title("Solicitar Corrida 📍")
         
         # Verifica se há corrida ativa
-        corrida_ativa = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
+        res_corrida = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
         
-        if corrida_ativa.data:
-            c = corrida_ativa.data[0]
+        if res_corrida.data:
+            c = res_corrida.data[0] # Pega a primeira ativa
             st.info(f"Sua corrida está: **{c['status']}**")
-            if c['motorista_nome']: st.success(f"Motorista a caminho: {c['motorista_nome']}")
+            if c.get('motorista_nome'): st.success(f"Motorista: {c['motorista_nome']}")
             
             # Mapa de Acompanhamento
             m_pax = folium.Map(location=[-25.0916, -50.1668], zoom_start=13)
-            if c['lat_motorista'] and c['lon_motorista']:
+            if c.get('lat_motorista') and c.get('lon_motorista'):
                 folium.Marker([c['lat_motorista'], c['lon_motorista']], 
-                              icon=folium.Icon(color='blue', icon='car', prefix='fa'),
-                              popup="Motorista").add_to(m_pax)
-            st_folium(m_pax, height=300, width=700, key="map_track")
+                              icon=folium.Icon(color='blue', icon='car', prefix='fa')).add_to(m_pax)
+            st_folium(m_pax, height=300, width=700, key="map_tracking")
             
             if st.button("Cancelar Corrida ❌"):
                 conn.table("corridas").delete().eq("id", c['id']).execute()
@@ -118,58 +118,49 @@ else:
                 
                 if c_o and c_d:
                     dist = geodesic(c_o, c_d).km
-                    valor = max(6.0, dist * 2.8) # R$ 2,80/km, min R$ 6,00
-                    
+                    valor = max(6.0, dist * 2.8)
                     st.write(f"📏 Distância: **{dist:.2f} km** | 💰 Valor: **R$ {valor:.2f}**")
                     
-                    # Mapa de Prévia
+                    # MAPA COM ORIGEM E DESTINO
                     m_previa = folium.Map(location=c_o, zoom_start=14)
-                    folium.Marker(c_o, color='green', popup="Origem").add_to(m_previa)
-                    folium.Marker(c_d, color='red', popup="Destino").add_to(m_previa)
+                    folium.Marker(c_o, popup="Origem", icon=folium.Icon(color='green')).add_to(m_previa)
+                    folium.Marker(c_d, popup="Destino", icon=folium.Icon(color='red')).add_to(m_previa)
                     folium.PolyLine([c_o, c_d], color="blue", weight=3).add_to(m_previa)
-                    st_folium(m_previa, height=300, width=700, key="map_previa")
+                    st_folium(m_previa, height=300, width=700, key="map_request")
 
-                    if st.button("CHAMAR AGORA 🚀", use_container_width=True):
+                    if st.button("CONFIRMAR CHAMADA 🚀", use_container_width=True):
                         conn.table("corridas").insert([{
                             "passageiro": st.session_state.user_nome,
                             "ponto_origem": origem, "ponto_destino": destino,
                             "distancia_km": dist, "valor_total": valor, "status": "Buscando"
                         }]).execute()
                         st.rerun()
-                else:
-                    st.caption("Aguardando endereços válidos...")
 
     # --- VISÃO MOTORISTA ---
     elif perfil == "Sou Motorista":
-        st.title("Chamadas Próximas 🛣️")
-        
-        # GPS em tempo real (Envia para o banco se estiver em corrida)
+        st.title("Painel do Motorista 🛣️")
         loc = get_geolocation()
         if loc:
             lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
             conn.table("corridas").update({"lat_motorista": lat, "lon_motorista": lon}).eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
 
-        # Listar corridas pendentes
         disponiveis = conn.table("corridas").select("*").eq("status", "Buscando").execute()
-        
-        if not disponiveis.data:
-            st.write("☕ Nenhuma chamada no momento. Aguarde...")
-        
         for r in disponiveis.data:
             with st.container(border=True):
-                st.write(f"👤 {r['passageiro']} | **R$ {r['valor_total']:.2f}**")
-                st.caption(f"De: {r['ponto_origem']}\nPara: {r['ponto_destino']}")
-                if st.button(f"Aceitar Chamada #{r['id']}", key=f"btn_{r['id']}", use_container_width=True):
+                st.write(f"📍 {r['ponto_origem']} ➡️ {r['ponto_destino']}")
+                st.write(f"💰 **R$ {r['valor_total']:.2f}**")
+                if st.button(f"Aceitar Corrida #{r['id']}", key=f"acc_{r['id']}", use_container_width=True):
                     conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
                     st.rerun()
 
-    # --- VISÃO ADM ---
+    # --- VISÃO ADMINISTRADOR ---
     elif perfil == "Administrador":
-        st.title("🛡️ Gestão Central")
+        st.title("🛡️ Gestão Central (ADM)")
         corridas = conn.table("corridas").select("*").execute()
         if corridas.data:
-            df = pd.DataFrame(corridas.data)
-            st.dataframe(df)
-            if st.button("Limpar Histórico"):
+            st.dataframe(pd.DataFrame(corridas.data))
+            if st.button("⚠️ Limpar Todas as Corridas"):
                 conn.table("corridas").delete().neq("id", 0).execute()
                 st.rerun()
+        else:
+            st.write("Nenhuma corrida registrada.")
