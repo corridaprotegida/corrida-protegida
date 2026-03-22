@@ -6,3 +6,4 @@ geopy
 streamlit-autorefresh
 streamlit-folium
 folium
+requests
