@@ -2,55 +2,54 @@ import streamlit as st
 from st_supabase_connection import SupabaseConnection
 from streamlit_js_eval import get_geolocation
 from streamlit_autorefresh import st_autorefresh
-from geopy.geocoders import Nominatim # Para transformar texto em coordenadas
+from geopy.geocoders import Nominatim
 import pandas as pd
 import urllib.parse
 
-# --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="Corrida Protegida 🛡️", layout="centered")
+# --- CONFIGURAÇÃO INICIAL ---
+st.set_page_config(page_title="Corrida Protegida 🛡️", layout="wide")
 conn = st.connection("supabase", type=SupabaseConnection)
-geolocator = Nominatim(user_agent="corrida_protegida_app")
+geolocator = Nominatim(user_agent="corrida_protegida_v4")
 
+# Atualização automática a cada 5 segundos
 st_autorefresh(interval=5000, key="global_refresh")
 
-# --- FUNÇÃO PARA PEGAR COORDENADAS DO TEXTO ---
+# --- FUNÇÃO DE SOM E GEOLOCALIZAÇÃO ---
+def play_notification_sound():
+    audio_html = '<audio autoplay><source src="https://codeskulptor-demos.commondatastorage.googleapis.com" type="audio/mp3"></audio>'
+    st.markdown(audio_html, unsafe_allow_html=True)
+
 def get_coords(endereco):
     try:
-        location = geolocator.geocode(endereco + ", Ponta Grossa, PR") # Refina para sua cidade
-        if location:
-            return location.latitude, location.longitude
-        return None, None
-    except:
-        return None, None
+        location = geolocator.geocode(endereco + ", Ponta Grossa, PR")
+        return (location.latitude, location.longitude) if location else (None, None)
+    except: return (None, None)
 
-# --- ESTADO DE LOGIN ---
+# --- INICIALIZAÇÃO DO ESTADO ---
 if "user_cpf" not in st.session_state:
-    st.session_state.user_cpf = None
-if "user_nome" not in st.session_state:
-    st.session_state.user_nome = None
-if "user_tipo" not in st.session_state:
-    st.session_state.user_tipo = None
+    st.session_state.update({"user_cpf": None, "user_nome": None, "user_tipo": None, "last_order_count": 0})
 
 def logout():
     if st.session_state.user_cpf:
         conn.table("usuarios").update({"logado": False}).eq("cpf", st.session_state.user_cpf).execute()
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
+    for key in list(st.session_state.keys()): del st.session_state[key]
     st.rerun()
 
 # --- TELA DE ACESSO ---
 if not st.session_state.user_cpf:
     st.title("🛡️ CORRIDA PROTEGIDA")
     t1, t2 = st.tabs(["🔐 Entrar", "📝 Cadastrar"])
+    
     with t2:
-        tp = st.radio("Eu sou:", ["Sou Passageiro", "Sou Motorista"], horizontal=True, key="r_tp")
+        tp = st.radio("Eu sou:", ["Sou Passageiro", "Sou Motorista"], horizontal=True, key="reg_tp")
         n, c, s = st.text_input("Nome"), st.text_input("CPF"), st.text_input("Senha", type="password")
         pix = st.text_input("Chave PIX") if tp == "Sou Motorista" else ""
         if st.button("Finalizar Cadastro"):
             conn.table("usuarios").insert([{"tipo": tp, "nome": n, "cpf": c, "senha": s, "chave_pix": pix}]).execute()
             st.success("✅ Cadastrado!")
+
     with t1:
-        tl = st.radio("Entrar como:", ["Sou Passageiro", "Sou Motorista", "Administrador"], horizontal=True, key="l_tp")
+        tl = st.radio("Entrar como:", ["Sou Passageiro", "Sou Motorista", "Administrador"], horizontal=True)
         lc, ls = st.text_input("CPF", key="l_c"), st.text_input("Senha", type="password", key="l_s")
         if st.button("Acessar"):
             r = conn.table("usuarios").select("*").eq("cpf", lc).eq("senha", ls).eq("tipo", tl).execute()
@@ -64,72 +63,93 @@ if not st.session_state.user_cpf:
 else:
     st.sidebar.write(f"👤 **{st.session_state.user_nome}**")
     perfil_ativo = st.session_state.user_tipo
+    
     if st.session_state.user_tipo == "Administrador":
-        perfil_ativo = st.sidebar.radio("Ver como:", ["Administrador", "Sou Passageiro", "Sou Motorista"])
+        st.sidebar.divider()
+        perfil_ativo = st.sidebar.radio("🛠️ Modo Teste:", ["Administrador", "Sou Passageiro", "Sou Motorista"])
+    
     st.sidebar.button("🚪 Sair", on_click=logout)
 
     # --- 1. VISÃO PASSAGEIRO ---
     if perfil_ativo == "Sou Passageiro":
-        st.title("Pedir Corrida 📍")
+        st.title("Painel do Passageiro 📍")
         res = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
         
         if res.data:
             c = res.data[0]
-            st.info(f"Status: {c['status']}")
-            # Mapa do Motorista vindo
-            if c['status'] == "Confirmada" and c.get('lat_motorista'):
-                st.map(pd.DataFrame({'lat': [c['lat_motorista']], 'lon': [c['lon_motorista']]}))
-            st.button("Cancelar ❌", on_click=lambda: conn.table("corridas").delete().eq("id", c['id']).execute())
-        else:
-            origem = st.text_input("Onde você está?", placeholder="Ex: Terminal Uvaranas")
-            destino = st.text_input("Para onde vamos?", placeholder="Ex: Rua Robalo 296")
+            st.info(f"Status: **{c['status']}**")
+            # Mapa de trajeto duplo (Origem e Destino)
+            lat_o, lon_o = get_coords(c['ponto_origem'])
+            lat_d, lon_d = get_coords(c['ponto_destino'])
+            df_trajeto = pd.DataFrame({'lat': [lat_o, lat_d], 'lon': [lon_o, lon_d]})
+            st.map(df_trajeto)
             
-            # MOSTRAR MAPA PRÉVIA (ORIGEM)
-            if origem:
-                lat_o, lon_o = get_coords(origem)
-                if lat_o:
-                    st.caption("📍 Localização identificada no mapa:")
-                    st.map(pd.DataFrame({'lat': [lat_o], 'lon': [lon_o]}), zoom=14)
-                else: st.warning("Endereço não localizado. Tente ser mais específico.")
-
-            v = st.number_input("Sua oferta (R$)", 5.0, value=15.0)
-            if st.button("SOLICITAR 🚀") and origem and destino:
-                conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": origem, "ponto_destino": destino, "valor_total": v, "status": "Buscando"}]).execute()
+            if st.button("Cancelar Corrida ❌"):
+                conn.table("corridas").delete().eq("id", c['id']).execute()
                 st.rerun()
+        else:
+            col_in, col_pre = st.columns([1, 1])
+            with col_in:
+                o = st.text_input("Origem", placeholder="Ex: Terminal Uvaranas")
+                d = st.text_input("Destino", placeholder="Ex: Rua Robalo 296")
+                v = st.number_input("Oferta (R$)", 5.0, value=15.0)
+                if st.button("SOLICITAR 🚀") and o and d:
+                    conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": o, "ponto_destino": d, "valor_total": v, "status": "Buscando"}]).execute()
+                    st.rerun()
+            with col_pre:
+                if o or d:
+                    pontos = []
+                    lat_o, lon_o = get_coords(o); lat_d, lon_d = get_coords(d)
+                    if lat_o: pontos.append({'lat': lat_o, 'lon': lon_o})
+                    if lat_d: pontos.append({'lat': lat_d, 'lon': lon_d})
+                    if pontos: st.map(pd.DataFrame(pontos))
 
-    # --- 2. VISÃO MOTORISTA ---
+    # --- 2. VISÃO MOTORISTA (TELA DIVIDIDA) ---
     elif perfil_ativo == "Sou Motorista":
         st.title("Painel do Motorista 🛣️")
-        
-        # GPS REAL DO MOTORISTA
+        col_map, col_list = st.columns([2, 1]) # Mapa maior na esquerda
+
         loc = get_geolocation()
         if loc:
             lat_m, lon_m = loc['coords']['latitude'], loc['coords']['longitude']
             conn.table("corridas").update({"lat_motorista": lat_m, "lon_motorista": lon_m}).eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
 
-        st.subheader("Chamadas Disponíveis")
-        corridas = conn.table("corridas").select("*").eq("status", "Buscando").execute()
-        
-        for r in corridas.data:
-            with st.container(border=True):
-                st.write(f"👤 **{r['passageiro']}** | R$ {r['valor_total']:.2f}")
-                st.write(f"🚩 De: {r['ponto_origem']} ➡️ {r['ponto_destino']}")
-                
-                # MAPA PARA O MOTORISTA VER A ORIGEM
-                lat_p, lon_p = get_coords(r['ponto_origem'])
-                if lat_p:
-                    st.map(pd.DataFrame({'lat': [lat_p], 'lon': [lon_p]}), zoom=13)
-                
-                # WAZE
-                addr = urllib.parse.quote(r['ponto_destino'])
-                st.markdown(f'<a href="waze://?q={addr}&navigate=yes"><button style="width:100%; background-color:#33CCFF; color:white; border:none; padding:10px; border-radius:5px; font-weight:bold;">🚀 ABRIR NO APP WAZE</button></a>', unsafe_allow_html=True)
-                
-                if st.button(f"Aceitar Corrida #{r['id']}", use_container_width=True):
-                    conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
-                    st.rerun()
+        with col_list:
+            st.subheader("🔔 Chamadas")
+            corridas = conn.table("corridas").select("*").eq("status", "Buscando").execute()
+            
+            if len(corridas.data) > st.session_state.last_order_count: play_notification_sound()
+            st.session_state.last_order_count = len(corridas.data)
+
+            for r in corridas.data:
+                with st.expander(f"👤 {r['passageiro']} - R$ {r['valor_total']}", expanded=True):
+                    st.write(f"🚩 {r['ponto_origem']} ➡️ {r['ponto_destino']}")
+                    addr = urllib.parse.quote(r['ponto_destino'])
+                    st.markdown(f'<a href="waze://?q={addr}&navigate=yes"><button style="width:100%; background-color:#33CCFF; color:white; border:none; padding:8px; border-radius:5px; font-weight:bold;">WAZE</button></a>', unsafe_allow_html=True)
+                    if st.button(f"ACEITAR #{r['id']}", use_container_width=True):
+                        conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
+                        st.rerun()
+
+        with col_map:
+            st.subheader("Mapa de Operação")
+            pontos_mapa = []
+            for r in corridas.data:
+                lat, lon = get_coords(r['ponto_origem'])
+                if lat: pontos_mapa.append({'lat': lat, 'lon': lon})
+            if loc: pontos_mapa.append({'lat': lat_m, 'lon': lon_m})
+            if pontos_mapa: st.map(pd.DataFrame(pontos_mapa), zoom=13)
 
     # --- 3. VISÃO ADMINISTRADOR ---
     elif perfil_ativo == "Administrador":
         st.title("🛡️ Painel ADM")
-        users = conn.table("usuarios").select("*").execute()
-        if users.data: st.dataframe(pd.DataFrame(users.data)[['nome', 'tipo', 'logado']])
+        t_u, t_c, t_f = st.tabs(["Usuários", "Corridas", "Financeiro"])
+        with t_u:
+            u_data = conn.table("usuarios").select("*").execute()
+            if u_data.data: st.dataframe(pd.DataFrame(u_data.data)[['nome', 'tipo', 'logado']])
+        with t_c:
+            c_data = conn.table("corridas").select("*").neq("status", "Finalizada").execute()
+            for ca in c_data.data:
+                st.write(f"ID {ca['id']} - {ca['passageiro']} | {ca['status']}")
+                if st.button(f"Encerrar #{ca['id']}"):
+                    conn.table("corridas").update({"status": "Finalizada"}).eq("id", ca['id']).execute()
+                    st.rerun()
