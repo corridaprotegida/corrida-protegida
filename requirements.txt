@@ -1,8 +1,8 @@
 streamlit
 pandas
-pillow
 st-supabase-connection
 streamlit-js-eval
 geopy
-extra-streamlit-components
 streamlit-autorefresh
+streamlit-folium
+folium
