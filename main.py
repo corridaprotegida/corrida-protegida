@@ -8,10 +8,13 @@ from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import pandas as pd
 import requests
+import urllib.parse
 
-# --- CONFIGURAÇÃO ---
+# --- CONFIGURAÇÃO INICIAL ---
 st.set_page_config(page_title="Corrida Protegida 🛡️", layout="centered")
 conn = st.connection("supabase", type=SupabaseConnection)
+
+# Atualização automática a cada 5 segundos para sincronizar as telas
 st_autorefresh(interval=5000, key="global_refresh")
 
 # --- FUNÇÕES DE MAPA E ROTA ---
@@ -32,10 +35,6 @@ def get_route_points(start_coords, end_coords):
         return [(p[1], p[0]) for p in coords] 
     except:
         return [start_coords, end_coords]
-
-def criar_mapa(centro, zoom=14):
-    """Cria mapa estável (OpenStreetMap) para evitar tela branca"""
-    return folium.Map(location=centro, zoom_start=zoom, tiles="OpenStreetMap")
 
 def logout():
     if st.session_state.get("user_cpf"):
@@ -59,7 +58,7 @@ if not st.session_state.user_cpf:
         pix = st.text_input("Chave PIX") if tp == "Sou Motorista" else ""
         if st.button("Cadastrar"):
             conn.table("usuarios").insert([{"tipo": tp, "nome": n, "cpf": c, "senha": s, "chave_pix": pix}]).execute()
-            st.success("✅ Conta criada!")
+            st.success("✅ Conta criada! Agora faça login.")
 
     with t1:
         tl = st.radio("Entrar como:", ["Sou Passageiro", "Sou Motorista", "Administrador"], horizontal=True)
@@ -67,7 +66,7 @@ if not st.session_state.user_cpf:
         if st.button("Acessar Sistema"):
             res = conn.table("usuarios").select("*").eq("cpf", lc).eq("senha", ls).eq("tipo", tl).execute()
             if res.data and len(res.data) > 0:
-                u = res.data[0] # Acessa o primeiro item da lista
+                u = res.data[0]
                 st.session_state.update({"user_cpf": u['cpf'], "user_nome": u['nome'], "user_tipo": u['tipo']})
                 conn.table("usuarios").update({"logado": True}).eq("cpf", u['cpf']).execute()
                 st.rerun()
@@ -78,19 +77,21 @@ else:
     st.sidebar.write(f"👤 **{st.session_state.user_nome}**")
     if st.sidebar.button("🚪 Sair"): logout()
     
+    perfil = st.session_state.user_tipo
+
     # --- VISÃO PASSAGEIRO ---
-    if st.session_state.user_tipo == "Sou Passageiro":
+    if perfil == "Sou Passageiro":
         st.title("Pedir Corrida 📍")
         res_c = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
         
         if res_c.data:
             c = res_c.data[0]
             st.warning(f"Status: {c['status']}")
-            m_track = criar_mapa([-25.0916, -50.1668], 13)
+            m_track = folium.Map(location=[-25.0916, -50.1668], zoom_start=13)
             if c.get('lat_motorista'):
                 folium.Marker([c['lat_motorista'], c['lon_motorista']], icon=folium.Icon(color='blue', icon='car', prefix='fa')).add_to(m_track)
             st_folium(m_track, height=300, width=700, key="map_track")
-            if st.button("Cancelar"):
+            if st.button("Cancelar Corrida"):
                 conn.table("corridas").delete().eq("id", c['id']).execute()
                 st.rerun()
         else:
@@ -102,40 +103,52 @@ else:
                     dist = geodesic(c_o, c_d).km
                     valor = max(6.0, dist * 2.8)
                     st.info(f"📏 {dist:.2f} km | 💰 R$ {valor:.2f}")
-                    
                     rota = get_route_points(c_o, c_d)
-                    m = criar_mapa(c_o, 14)
-                    folium.Marker(c_o, icon=folium.Icon(color='green', icon='play')).add_to(m)
-                    folium.Marker(c_d, icon=folium.Icon(color='red', icon='stop')).add_to(m)
-                    folium.PolyLine(rota, color="blue", weight=5, opacity=0.8).add_to(m)
-                    st_folium(m, height=400, width=700, key="map_req")
-
+                    m = folium.Map(location=c_o, zoom_start=14)
+                    folium.Marker(c_o, icon=folium.Icon(color='green')).add_to(m)
+                    folium.Marker(c_d, icon=folium.Icon(color='red')).add_to(m)
+                    folium.PolyLine(rota, color="blue", weight=5).add_to(m)
+                    st_folium(m, height=350, width=700, key="map_pax")
                     if st.button("CHAMAR AGORA 🚀", use_container_width=True):
                         conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": o_txt, "ponto_destino": d_txt, "distancia_km": dist, "valor_total": valor, "status": "Buscando"}]).execute()
                         st.rerun()
 
     # --- VISÃO MOTORISTA ---
-    elif st.session_state.user_tipo == "Sou Motorista":
-        st.title("Painel Motorista 🛣️")
+    elif perfil == "Sou Motorista":
+        st.title("Chamadas Disponíveis 🛣️")
         loc = get_geolocation()
         if loc:
-            lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
-            conn.table("corridas").update({"lat_motorista": lat, "lon_motorista": lon}).eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
+            lat_m, lon_m = loc['coords']['latitude'], loc['coords']['longitude']
+            conn.table("corridas").update({"lat_motorista": lat_m, "lon_motorista": lon_m}).eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
 
         disponiveis = conn.table("corridas").select("*").eq("status", "Buscando").execute()
         for r in disponiveis.data:
             with st.container(border=True):
-                st.write(f"📍 {r['ponto_origem']} ➡️ {r['ponto_destino']}")
-                st.write(f"💰 **R$ {r['valor_total']:.2f}**")
-                if st.button(f"Aceitar #{r['id']}", use_container_width=True):
-                    conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
-                    st.rerun()
+                st.write(f"👤 {r['passageiro']} | **R$ {r['valor_total']:.2f}**")
+                c_o = get_coords(r['ponto_origem'])
+                c_d = get_coords(r['ponto_destino'])
+                if c_o and c_d:
+                    rota_m = get_route_points(c_o, c_d)
+                    m_moto = folium.Map(location=c_o, zoom_start=13)
+                    folium.Marker(c_o, icon=folium.Icon(color='green', icon='user', prefix='fa')).add_to(m_moto)
+                    folium.Marker(c_d, icon=folium.Icon(color='red', icon='flag', prefix='fa')).add_to(m_moto)
+                    folium.PolyLine(rota_m, color="orange", weight=5).add_to(m_moto)
+                    st_folium(m_moto, height=250, width=650, key=f"map_moto_{r['id']}")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button(f"✅ Aceitar #{r['id']}", use_container_width=True):
+                        conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
+                        st.rerun()
+                with col2:
+                    addr = urllib.parse.quote(r['ponto_origem'])
+                    st.markdown(f'<a href="https://www.google.com{addr}" target="_blank"><button style="width:100%; background-color:#34a853; color:white; border:none; padding:8px; border-radius:5px; font-weight:bold;">📍 VER NO MAPS</button></a>', unsafe_allow_html=True)
 
     # --- VISÃO ADMINISTRADOR ---
-    elif st.session_state.user_tipo == "Administrador":
+    elif perfil == "Administrador":
         st.title("🛡️ Admin")
-        corridas = conn.table("corridas").select("*").execute()
-        st.dataframe(pd.DataFrame(corridas.data) if corridas.data else [])
-        if st.button("Limpar Tudo"):
+        ativas = conn.table("corridas").select("*").execute()
+        st.dataframe(pd.DataFrame(ativas.data) if ativas.data else [])
+        if st.button("Limpar Sistema"):
             conn.table("corridas").delete().neq("id", 0).execute()
             st.rerun()
