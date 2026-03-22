@@ -7,3 +7,4 @@ streamlit-autorefresh
 streamlit-folium
 folium
 requests
+streamlit-folium
