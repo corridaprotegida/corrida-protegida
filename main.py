@@ -168,6 +168,32 @@ else:
                                 conn.table("corridas").update({"status": "Finalizada"}).eq("id", r['id']).execute()
                                 st.balloons()
                                 st.rerun()
+       # ... dentro do loop do motorista ...
+elif r['status'] == "Confirmada":
+    st.success("✅ Corrida em andamento")
+    
+    # Prepara o endereço para o Deep Link do App
+    destino_texto = str(r['ponto_destino'])
+    addr_waze = urllib.parse.quote(destino_texto) # Transforma espaços em códigos de URL
+    
+    # Link que força a abertura do Aplicativo Waze no celular
+    st.markdown(f'''
+        <a href="waze://?q={addr_waze}&navigate=yes" target="_blank">
+            <button style="
+                width: 100%; 
+                background-color: #33CCFF; 
+                color: white; 
+                border: none; 
+                padding: 10px; 
+                border-radius: 5px; 
+                font-weight: bold; 
+                cursor: pointer; 
+                margin-bottom: 10px;">
+                🚀 ABRIR NO APP WAZE
+            </button>
+        </a>
+    ''', unsafe_allow_html=True)
+
             else:
                 st.info("Aguardando novas chamadas...")
 
