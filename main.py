@@ -62,40 +62,65 @@ else:
     p_ativo = st.sidebar.radio("Modo:", ["Administrador", "Sou Passageiro", "Sou Motorista"]) if st.session_state.user_tipo == "Administrador" else st.session_state.user_tipo
     st.sidebar.button("Sair", on_click=logout)
 
-    # --- VISÃO PASSAGEIRO (ACOMPANHAMENTO REAL) ---
+     # --- 1. VISÃO PASSAGEIRO (CORRIGIDA) ---
     if p_ativo == "Sou Passageiro":
-        st.title("Sua Corrida 📍")
+        st.title("Acompanhamento da Viagem 📍")
+        
+        # Busca corridas que NÃO estão finalizadas para este passageiro
         res = conn.table("corridas").select("*").eq("passageiro", st.session_state.user_nome).neq("status", "Finalizada").execute()
         
-        if res.data:
-            c = res.data[0]
-            lat_o, lon_o = get_coords_safe(c['ponto_origem'])
-            lat_d, lon_d = get_coords_safe(c['ponto_destino'])
+        # VERIFICAÇÃO DE SEGURANÇA: Só prossegue se houver dados na lista
+        if res.data and len(res.data) > 0:
+            c = res.data[0] # Pega o primeiro item com segurança
             
-            # Criar Mapa com Rota
-            m = folium.Map(location=[lat_o, lon_o], zoom_start=14)
-            folium.Marker([lat_o, lon_o], icon=folium.Icon(color='green', icon='play')).add_to(m)
-            folium.Marker([lat_d, lon_d], icon=folium.Icon(color='red', icon='flag')).add_to(m)
+            st.info(f"Status Atual: **{c['status']}**")
             
-            rota = get_route_real(lat_o, lon_o, lat_d, lon_d)
-            if rota: folium.PolyLine(rota, color="#2ecc71", weight=6).add_to(m)
+            # Tenta localizar coordenadas
+            lat_o, lon_o = get_coords_safe(c.get('ponto_origem'))
+            lat_d, lon_d = get_coords_safe(c.get('ponto_destino'))
             
-            # POSIÇÃO DO MOTORISTA (ATUALIZADA PELO BANCO)
-            if c.get('lat_motorista'):
-                folium.Marker([c['lat_motorista'], c['lon_motorista']], 
-                              popup="Seu Motorista",
-                              icon=folium.Icon(color='orange', icon='car', prefix='fa')).add_to(m)
-                st.success(f"🚖 {c.get('motorista_nome', 'Motorista')} está a caminho!")
+            # Só desenha o mapa se as coordenadas forem válidas
+            if lat_o and lat_d:
+                m = folium.Map(location=[lat_o, lon_o], zoom_start=14)
+                folium.Marker([lat_o, lon_o], icon=folium.Icon(color='green', icon='play')).add_to(m)
+                folium.Marker([lat_d, lon_d], icon=folium.Icon(color='red', icon='flag')).add_to(m)
+                
+                # Desenha rota real
+                rota = get_route_real(lat_o, lon_o, lat_d, lon_d)
+                if rota: 
+                    folium.PolyLine(rota, color="#2ecc71", weight=6).add_to(m)
+                
+                # Mostra o carrinho do motorista se ele já aceitou
+                if c.get('lat_motorista'):
+                    folium.Marker([c['lat_motorista'], c['lon_motorista']], 
+                                  icon=folium.Icon(color='orange', icon='car', prefix='fa')).add_to(m)
+                
+                # Renderiza o mapa
+                st_folium(m, width="100%", height=400, key=f"map_pax_{c['id']}")
             
-            st_folium(m, width="100%", height=500, key=f"map_pax_{c['id']}")
-            if st.button("CANCELAR CORRIDA ❌"):
+            if st.button("CANCELAR CORRIDA ❌", key=f"btn_canc_{c['id']}"):
                 conn.table("corridas").delete().eq("id", c['id']).execute()
                 st.rerun()
+        
         else:
-            o, d = st.text_input("Origem"), st.text_input("Destino")
-            if st.button("SOLICITAR 🚀") and o and d:
-                conn.table("corridas").insert([{"passageiro": st.session_state.user_nome, "ponto_origem": o, "ponto_destino": d, "valor_total": 15.0, "status": "Buscando"}]).execute()
-                st.rerun()
+            # Se não houver corrida ativa, mostra o formulário de pedido
+            st.subheader("Para onde vamos hoje?")
+            o = st.text_input("Sua localização atual", key="input_o")
+            d = st.text_input("Seu destino", key="input_d")
+            v = st.number_input("Quanto deseja oferecer? (R$)", min_value=5.0, value=15.0)
+            
+            if st.button("SOLICITAR AGORA 🚀"):
+                if o and d:
+                    conn.table("corridas").insert([{
+                        "passageiro": st.session_state.user_nome, 
+                        "ponto_origem": o, 
+                        "ponto_destino": d, 
+                        "valor_total": v, 
+                        "status": "Buscando"
+                    }]).execute()
+                    st.rerun()
+                else:
+                    st.warning("Preencha a origem e o destino!")
 
     # --- VISÃO MOTORISTA (ATUALIZA GPS NO BANCO) ---
     elif p_ativo == "Sou Motorista":
