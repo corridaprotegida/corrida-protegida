@@ -147,3 +147,59 @@ else:
                     if st.button(f"ACEITAR #{r['id']}", key=f"ac_{r['id']}"):
                         conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome, "lat_motorista": lat_m, "lon_motorista": lon_m}).eq("id", r['id']).execute()
                         st.rerun()
+    # --- 3. VISÃO ADMINISTRADOR (CORRIGIDA) ---
+    elif p_ativo == "Administrador":
+        st.title("🛡️ Painel de Controle ADM")
+        
+        # Criamos as abas para organizar
+        t_u, t_c, t_f = st.tabs(["👥 Usuários", "🚖 Corridas Ativas", "📊 Financeiro"])
+
+        with t_u:
+            st.subheader("Gerenciar Usuários")
+            try:
+                users = conn.table("usuarios").select("*").execute()
+                if users.data and len(users.data) > 0:
+                    df_u = pd.DataFrame(users.data)
+                    # Filtra apenas colunas que existem para evitar KeyError
+                    cols = [c for c in ['nome', 'tipo', 'cpf', 'logado'] if c in df_u.columns]
+                    st.dataframe(df_u[cols], use_container_width=True)
+                    
+                    u_del = st.selectbox("Remover Usuário:", df_u['nome'], key="adm_del_user")
+                    if st.button("Remover Permanentemente", type="primary"):
+                        conn.table("usuarios").delete().eq("nome", u_del).execute()
+                        st.success(f"Usuário {u_del} removido!")
+                        st.rerun()
+                else:
+                    st.info("Nenhum usuário cadastrado no banco.")
+            except Exception as e:
+                st.error(f"Erro ao carregar usuários: {e}")
+
+        with t_c:
+            st.subheader("Monitoramento em Tempo Real")
+            try:
+                cor_ativas = conn.table("corridas").select("*").neq("status", "Finalizada").execute()
+                if cor_ativas.data and len(cor_ativas.data) > 0:
+                    for ca in cor_ativas.data:
+                        with st.container(border=True):
+                            st.write(f"🆔 **ID:** {ca['id']} | **Status:** {ca['status']}")
+                            st.write(f"👤 {ca['passageiro']} ➡️ {ca['motorista_nome'] or 'Buscando...'}")
+                            st.write(f"💰 Valor: R$ {ca['valor_total']:.2f}")
+                            if st.button(f"Forçar Encerramento #{ca['id']}", key=f"adm_force_{ca['id']}"):
+                                conn.table("corridas").update({"status": "Finalizada"}).eq("id", ca['id']).execute()
+                                st.rerun()
+                else:
+                    st.info("Nenhuma corrida ativa no momento.")
+            except Exception as e:
+                st.error(f"Erro ao carregar corridas: {e}")
+
+        with t_f:
+            st.subheader("Resumo de Ganhos")
+            try:
+                fina = conn.table("corridas").select("valor_total").eq("status", "Finalizada").execute()
+                if fina.data:
+                    total = sum(i['valor_total'] for i in fina.data)
+                    st.metric("Volume Total Finalizado", f"R$ {total:.2f}")
+                else:
+                    st.metric("Volume Total Finalizado", "R$ 0,00")
+            except:
+                st.write("Dados financeiros indisponíveis.")
