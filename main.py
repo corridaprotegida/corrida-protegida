@@ -128,15 +128,3 @@ def verificar_identidade():
                 except Exception as e:
                     st.error(f"Erro na detecção: Certifique-se de que seu rosto está visível nas duas fotos.")
     return False
-
-# Exemplo de uso no seu painel:
-# if st.session_state.user_tipo == "Sou Motorista":
-#    if "verificado" not in st.session_state:
-#        st.session_state.verificado = False
-#    
-#    if not st.session_state.verificado:
-#        if verificar_identidade():
-#            st.session_state.verificado = True
-#            st.rerun()
-#    else:
-#        st.write("Painel liberado!")
