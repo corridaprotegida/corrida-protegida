@@ -122,25 +122,75 @@ else:
                 else:
                     st.warning("Preencha a origem e o destino!")
 
-    # --- VISÃO MOTORISTA (ATUALIZA GPS NO BANCO) ---
+     # --- 2. VISÃO MOTORISTA (CORRIGIDA E BLINDADA) ---
     elif p_ativo == "Sou Motorista":
-        st.title("Painel Motorista 🛣️")
+        st.title("Painel do Motorista 🛣️")
         
-        # CAPTURA GPS DO CELULAR
+        # 1. CAPTURA GPS DO CELULAR (Essencial para o passageiro te ver)
         loc = get_geolocation()
-        if loc:
-            lat_gps, lon_gps = loc['coords']['latitude'], loc['coords']['longitude']
-            # Atualiza o banco para o passageiro ver
+        lat_gps, lon_gps = (loc['coords']['latitude'], loc['coords']['longitude']) if loc else (None, None)
+        
+        if lat_gps:
+            # Atualiza sua posição no banco se você estiver em uma corrida ativa
             conn.table("corridas").update({"lat_motorista": lat_gps, "lon_motorista": lon_gps}).eq("motorista_nome", st.session_state.user_nome).eq("status", "Confirmada").execute()
-            st.sidebar.success("🛰️ GPS Ativo e Sincronizado")
+            st.sidebar.success("🛰️ GPS Sincronizado")
 
-        corridas = conn.table("corridas").select("*").eq("status", "Buscando").execute()
-        for r in corridas.data:
-            with st.container(border=True):
-                st.write(f"👤 {r['passageiro']} | De: {r['ponto_origem']}")
-                if st.button(f"ACEITAR CORRIDA #{r['id']}", use_container_width=True):
-                    conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
-                    st.rerun()
+        # 2. DIVISÃO DA TELA: MAPA (ESQUERDA) | CHAMADAS (DIREITA)
+        col_mapa, col_lista = st.columns([2, 1])
+
+        # Busca chamadas disponíveis ou a corrida que você já aceitou
+        res_mot = conn.table("corridas").select("*").or_(f"status.eq.Buscando,and(status.eq.Confirmada,motorista_nome.eq.{st.session_state.user_nome})").execute()
+        
+        with col_lista:
+            st.subheader("🔔 Chamadas")
+            if res_mot.data and len(res_mot.data) > 0:
+                for r in res_mot.data:
+                    with st.container(border=True):
+                        st.write(f"👤 **{r['passageiro']}**")
+                        st.write(f"💰 R$ {r['valor_total']:.2f}")
+                        st.caption(f"🏁 {r['ponto_destino']}")
+                        
+                        # Se a corrida está apenas buscando, mostra botão de ACEITAR
+                        if r['status'] == "Buscando":
+                            if st.button(f"ACEITAR #{r['id']}", key=f"mot_acc_{r['id']}", use_container_width=True):
+                                conn.table("corridas").update({"status": "Confirmada", "motorista_nome": st.session_state.user_nome}).eq("id", r['id']).execute()
+                                st.rerun()
+                        
+                        # Se já aceitou, mostra o botão de FINALIZAR e o link do WAZE
+                        elif r['status'] == "Confirmada":
+                            st.success("✅ Corrida em andamento")
+                            # Link direto para o APP do Waze
+                            addr_waze = urllib.parse.quote(r['ponto_destino'])
+                            st.markdown(f'<a href="waze://?q={addr_waze}&navigate=yes"><button style="width:100%; background-color:#33CCFF; color:white; border:none; padding:10px; border-radius:5px; font-weight:bold; cursor:pointer; margin-bottom:10px;">🚀 ABRIR NO WAZE</button></a>', unsafe_allow_html=True)
+                            
+                            if st.button("🏁 FINALIZAR CORRIDA", key=f"mot_fin_{r['id']}", type="primary", use_container_width=True):
+                                conn.table("corridas").update({"status": "Finalizada"}).eq("id", r['id']).execute()
+                                st.balloons()
+                                st.rerun()
+            else:
+                st.info("Aguardando novas chamadas...")
+
+        with col_mapa:
+            st.subheader("Mapa de Operação")
+            # Centraliza no GPS do motorista ou no centro de PG
+            m_lat, m_lon = (lat_gps, lon_gps) if lat_gps else (-25.095, -50.161)
+            m_mot = folium.Map(location=[m_lat, m_lon], zoom_start=13)
+            
+            # Ícone do Motorista (Sempre visível se GPS estiver ON)
+            if lat_gps:
+                folium.Marker([lat_gps, lon_gps], tooltip="Você", icon=folium.Icon(color='orange', icon='car', prefix='fa')).add_to(m_mot)
+            
+            # Mostra no mapa os pontos das corridas disponíveis
+            if res_mot.data:
+                for r in res_mot.data:
+                    lat_o, lon_o = get_coords_safe(r['ponto_origem'])
+                    if lat_o:
+                        cor_icon = 'blue' if r['status'] == "Buscando" else 'green'
+                        folium.Marker([lat_o, lon_o], tooltip=f"Passageiro: {r['passageiro']}", icon=folium.Icon(color=cor_icon)).add_to(m_mot)
+            
+            # Renderiza o mapa com chave única para evitar travamento
+            st_folium(m_mot, width="100%", height=500, key="mapa_motorista_tela")
+
 
     # --- VISÃO ADMINISTRADOR ---
     elif p_ativo == "Administrador":
