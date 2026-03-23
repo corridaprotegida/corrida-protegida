@@ -8,3 +8,6 @@ streamlit-folium
 folium
 requests
 streamlit-folium
+deepface
+opencv-python-headless
+tf-keras
