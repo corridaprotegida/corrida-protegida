@@ -6,6 +6,7 @@ from streamlit_folium import st_folium
 import folium
 import requests
 import pandas as pd
+import urllib.parse  # <--- ESTA LINHA É ESSENCIAL
 from geopy.geocoders import Nominatim
 
 # --- CONFIGURAÇÃO ---
